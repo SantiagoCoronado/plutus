@@ -18,6 +18,8 @@ class Interval(StrEnum):
     h4 = "4h"
     d1 = "1d"
     w1 = "1w"
+    # resample-only (computed on read via time_bucket; never stored in ohlcv)
+    mo1 = "1M"
 
 
 class Quote(BaseModel):

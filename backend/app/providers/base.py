@@ -65,18 +65,26 @@ class RateLimit:
 #   twelvedata:  8 credits/min, 800 credits/day
 #   finnhub:     60 req/min
 #   alphavantage: ~5 req/min, 25 req/day
+#   binance:     6000 weight/min, klines cost 2 — 300 req/min is ~10% utilization, keyless
+#   fmp:         250 req/day (no published per-minute figure; 8/min is polite)
+#   edgar:       SEC cap 10 req/s, keyless (mandatory User-Agent with contact email)
 PROVIDER_LIMITS: dict[str, RateLimit] = {
     "tiingo": RateLimit(capacity=45, refill_amount=45, refill_period_s=3600, day_budget=900),
     "coingecko": RateLimit(capacity=25, refill_amount=25, refill_period_s=60, month_budget=9000),
     "twelvedata": RateLimit(capacity=7, refill_amount=7, refill_period_s=60, day_budget=750),
     "finnhub": RateLimit(capacity=55, refill_amount=55, refill_period_s=60),
     "alphavantage": RateLimit(capacity=4, refill_amount=4, refill_period_s=60, day_budget=23),
+    "binance": RateLimit(capacity=300, refill_amount=300, refill_period_s=60),
+    "fmp": RateLimit(capacity=8, refill_amount=8, refill_period_s=60, day_budget=225),
+    "edgar": RateLimit(capacity=8, refill_amount=8, refill_period_s=1),
 }
 
 # Response-cache TTLs per data type (spec §3)
 TTL_DAILY_BARS = 12 * 3600
 TTL_QUOTE = 60
 TTL_SEARCH = 24 * 3600
+TTL_FUNDAMENTALS = 24 * 3600
+TTL_NEWS = 600  # one 15-min poll cycle
 
 
 def empty_candles() -> pd.DataFrame:

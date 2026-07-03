@@ -16,6 +16,7 @@ dependencies = [
     "httpx==0.28.1",
     "pandas>=2.2,<3.0",
     "structlog>=25.4,<26",
+    "pandas-ta-classic>=0.6.52",
 ]
 
 [dependency-groups]

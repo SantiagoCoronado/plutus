@@ -29,7 +29,7 @@ SEED_ASSETS: list[dict] = [
         "asset_class": "crypto",
         "exchange": None,
         "currency": "USD",
-        "metadata": {"provider_symbols": {"coingecko": "bitcoin"}},
+        "metadata": {"provider_symbols": {"coingecko": "bitcoin", "binance": "BTCUSDT"}},
     },
     {
         "symbol": "EURUSD",
@@ -41,10 +41,34 @@ SEED_ASSETS: list[dict] = [
     },
 ]
 
+# Benchmarks for relative strength (spec §5.3) — ordinary tracked assets, ingested by
+# the same nightly EOD jobs. BTC (crypto benchmark) is already in SEED_ASSETS.
+BENCHMARK_ASSETS: list[dict] = [
+    {
+        "symbol": "SPY",
+        "name": "SPDR S&P 500 ETF Trust",
+        "asset_class": "etf",
+        "exchange": "NYSEARCA",
+        "currency": "USD",
+        "metadata": {"provider_symbols": {"tiingo": "SPY"}, "benchmark": True},
+    },
+    # DXY itself is paid-gated on Twelve Data's free tier (verified: 404) — UUP is the
+    # ETF proxy for the dollar index, served by tiingo like any stock/ETF
+    {
+        "symbol": "UUP",
+        "name": "Invesco DB US Dollar Index Bullish Fund",
+        "asset_class": "etf",
+        "exchange": "NYSEARCA",
+        "currency": "USD",
+        "metadata": {"provider_symbols": {"tiingo": "UUP"}, "benchmark": True},
+    },
+]
+
 
 def seed_assets() -> list[tuple[int, str]]:
+    specs = SEED_ASSETS + BENCHMARK_ASSETS
     with session_scope() as session:
-        for spec in SEED_ASSETS:
+        for spec in specs:
             # insert on the table, not the ORM class: the "metadata" column name would
             # otherwise resolve against Base.metadata in values()
             stmt = pg_insert(Asset.__table__).values(**spec)
@@ -62,7 +86,7 @@ def seed_assets() -> list[tuple[int, str]]:
             session.execute(stmt)
         rows = session.execute(
             select(Asset.id, Asset.symbol).where(
-                Asset.symbol.in_([s["symbol"] for s in SEED_ASSETS])
+                Asset.symbol.in_([s["symbol"] for s in specs])
             )
         ).all()
         return [(row.id, row.symbol) for row in rows]

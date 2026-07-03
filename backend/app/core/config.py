@@ -21,13 +21,21 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     provider_stocks: str = "tiingo"
-    provider_crypto: str = "coingecko"
+    provider_crypto: str = "binance"
     provider_forex: str = "twelvedata"
+    provider_fundamentals: str = "fmp"
+    provider_news: str = "finnhub"
 
     tiingo_api_key: str = ""
     coingecko_api_key: str = ""
     twelvedata_api_key: str = ""
     finnhub_api_key: str = ""
+    fmp_api_key: str = ""
+
+    # benchmarks for relative strength (spec §5.3); resolved by symbol across classes
+    benchmark_stock: str = "SPY"
+    benchmark_crypto: str = "BTC"
+    benchmark_forex: str = "UUP"  # DXY is paid-gated on Twelve Data free (verified 404)
 
     initial_backfill_days: int = 730
 

@@ -2,6 +2,8 @@ import redis
 
 from app.core.config import get_settings
 from app.providers.base import PROVIDER_LIMITS, MarketDataProvider, ProviderNotConfigured
+from app.providers.binance import BASE_URL as BINANCE_URL
+from app.providers.binance import BinanceProvider
 from app.providers.coingecko import BASE_URL as COINGECKO_URL
 from app.providers.coingecko import CoinGeckoProvider
 from app.providers.http import RateLimitedClient, redis_from_url
@@ -10,6 +12,10 @@ from app.providers.tiingo import TiingoProvider
 from app.providers.twelvedata import BASE_URL as TWELVEDATA_URL
 from app.providers.twelvedata import TwelveDataProvider
 from app.schemas.common import AssetClass
+
+# Providers without name search delegate the search surface to a richer catalog
+# (Binance OHLCV + CoinGecko search/metadata is the intended crypto pairing)
+SEARCH_DELEGATES: dict[str, str] = {"binance": "coingecko"}
 
 _instances: dict[str, MarketDataProvider] = {}
 _redis: redis.Redis | None = None
@@ -46,6 +52,11 @@ def _build(name: str) -> MarketDataProvider:
             "twelvedata", TWELVEDATA_URL, _shared_redis(), PROVIDER_LIMITS["twelvedata"]
         )
         provider = TwelveDataProvider(client, settings.twelvedata_api_key)
+    elif name == "binance":
+        client = RateLimitedClient(
+            "binance", BINANCE_URL, _shared_redis(), PROVIDER_LIMITS["binance"]
+        )
+        provider = BinanceProvider(client)
     elif name in ("finnhub", "alphavantage"):
         # config switch exists per spec ("configuration, not code"); adapters are post-Phase 1
         raise ProviderNotConfigured(f"{name}: adapter not yet implemented")
@@ -79,6 +90,22 @@ def configured_providers() -> list[MarketDataProvider]:
         if provider.name not in seen:
             seen.add(provider.name)
             providers.append(provider)
+    return providers
+
+
+def search_providers() -> list[MarketDataProvider]:
+    """configured_providers() with search-less providers swapped for their delegates."""
+    providers: list[MarketDataProvider] = []
+    seen: set[str] = set()
+    for provider in configured_providers():
+        name = SEARCH_DELEGATES.get(provider.name, provider.name)
+        if name in seen:
+            continue
+        seen.add(name)
+        try:
+            providers.append(_build(name))
+        except ProviderNotConfigured:
+            continue
     return providers
 
 

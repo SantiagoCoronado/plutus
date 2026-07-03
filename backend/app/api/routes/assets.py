@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.core.logging import get_logger
 from app.models import Asset, Ohlcv
-from app.providers.registry import configured_providers
+from app.providers.registry import search_providers
 from app.schemas.asset import AssetCreate, AssetOut, SearchResponse, SearchResultItem
 from app.schemas.common import Interval
 from app.schemas.ohlcv import Candle, OhlcvResponse
@@ -46,7 +46,7 @@ def search_assets(
     ]
 
     # Provider suggestions degrade gracefully: short rate-limit budget, any failure -> local only
-    for provider in configured_providers():
+    for provider in search_providers():
         try:
             for info in provider.search_symbols(q)[:10]:
                 if (info.symbol.upper(), info.asset_class.value) in tracked_keys:
