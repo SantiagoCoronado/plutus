@@ -8,7 +8,7 @@ infra-down:
 	docker compose stop db redis
 
 api:              ## run FastAPI natively with reload
-	cd backend && uv run uvicorn app.main:app --reload --port 8000
+	cd backend && uv run uvicorn app.main:app --reload --port 8800
 
 worker:           ## run Celery worker natively
 	cd backend && uv run celery -A worker.celery_app worker -l info --concurrency=2

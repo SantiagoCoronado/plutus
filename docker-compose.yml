@@ -40,7 +40,8 @@ services:
     env_file: .env
     environment: *backend-env
     ports:
-      - "8000:8000"
+      # host 8800 (8000 is commonly taken by other local stacks); in-container stays 8000
+      - "8800:8000"
     depends_on:
       db:
         condition: service_healthy
