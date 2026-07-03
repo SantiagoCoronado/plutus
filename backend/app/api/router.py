@@ -1,0 +1,14 @@
+from fastapi import APIRouter, Depends
+
+from app.api.deps import require_auth
+from app.api.routes import assets, ingestion
+
+api_router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_auth)])
+api_router.include_router(assets.router)
+api_router.include_router(ingestion.router)
+
+
+@api_router.get("/ping", tags=["meta"])
+def ping():
+    """Authenticated no-op; lets clients validate their token without touching the DB."""
+    return {"pong": True}

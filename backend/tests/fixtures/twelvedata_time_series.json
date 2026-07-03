@@ -1,0 +1,15 @@
+{
+  "meta": {
+    "symbol": "EUR/USD",
+    "interval": "1day",
+    "currency_base": "Euro",
+    "currency_quote": "US Dollar",
+    "type": "Physical Currency"
+  },
+  "values": [
+    { "datetime": "2026-07-01", "open": "1.08210", "high": "1.08760", "low": "1.08100", "close": "1.08640" },
+    { "datetime": "2026-06-30", "open": "1.07950", "high": "1.08350", "low": "1.07820", "close": "1.08200" },
+    { "datetime": "2026-06-29", "open": "1.08100", "high": "1.08240", "low": "1.07610", "close": "1.07940" }
+  ],
+  "status": "ok"
+}
