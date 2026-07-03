@@ -71,7 +71,9 @@ def seed_assets() -> list[tuple[int, str]]:
 def main(argv: list[str] | None = None) -> None:
     configure_logging()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--ingest", action="store_true", help="run EOD ingestion inline after seeding")
+    parser.add_argument(
+        "--ingest", action="store_true", help="run EOD ingestion inline after seeding"
+    )
     args = parser.parse_args(argv)
 
     for asset_id, symbol in seed_assets():

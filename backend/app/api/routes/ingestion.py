@@ -14,9 +14,12 @@ def list_runs(
     limit: int = Query(default=20, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
-    return db.scalars(
-        select(IngestionRun).order_by(IngestionRun.started_at.desc(), IngestionRun.id.desc()).limit(limit)
-    ).all()
+    query = (
+        select(IngestionRun)
+        .order_by(IngestionRun.started_at.desc(), IngestionRun.id.desc())
+        .limit(limit)
+    )
+    return db.scalars(query).all()
 
 
 @router.post("/run", status_code=202)

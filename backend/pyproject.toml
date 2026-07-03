@@ -47,3 +47,9 @@ target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# B008: Depends()/Query() in defaults is the FastAPI idiom
+"app/api/**" = ["B008"]
+# E402: integration conftest must pin env vars before app imports
+"tests/integration/conftest.py" = ["E402"]

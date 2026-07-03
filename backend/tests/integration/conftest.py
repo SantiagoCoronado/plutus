@@ -55,8 +55,9 @@ def test_database():
         pytest.skip("compose db not reachable on localhost:5433 — run `make infra` first")
 
     # Running the real migration here validates the hypertable + compression DDL
-    from alembic import command
     from alembic.config import Config
+
+    from alembic import command
 
     command.upgrade(Config("alembic.ini"), "head")
     yield
