@@ -73,6 +73,17 @@ class TestTwelveData:
         with pytest.raises(ProviderRateLimitError):
             TwelveDataProvider._parse_ohlcv(payload)
 
+    def test_empty_range_400_is_empty_not_error(self):
+        # exact shape Twelve Data returns when the window has no finished bar yet
+        payload = {
+            "code": 400,
+            "message": "No data is available on the specified dates. "
+            "Try setting different start/end dates.",
+            "status": "error",
+            "meta": {"symbol": "EUR/USD", "interval": "1day", "exchange": ""},
+        }
+        assert TwelveDataProvider._parse_ohlcv(payload).empty
+
 
 class TestCandlesToRows:
     def test_rows_from_canonical_frame(self):

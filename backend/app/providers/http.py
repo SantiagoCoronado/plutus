@@ -99,8 +99,13 @@ class RateLimitedClient:
         cache_ttl: int | None = None,
         acquire_timeout: float = 120.0,
         cache_key_exclude: tuple[str, ...] = ("token", "apikey", "api_key"),
+        tolerate_statuses: tuple[int, ...] = (),
     ) -> Any:
-        """GET path, honoring cache, budgets, token bucket, and retry/backoff."""
+        """GET path, honoring cache, budgets, token bucket, and retry/backoff.
+
+        `tolerate_statuses`: error codes whose JSON body the caller interprets itself
+        (e.g. Twelve Data answers 400 with a semantic error payload). Never cached.
+        """
         params = params or {}
         cache_key = self._cache_key(path, params, cache_key_exclude)
 
@@ -111,9 +116,9 @@ class RateLimitedClient:
 
         self._check_budget()
         self._acquire_token(acquire_timeout)
-        payload = self._request_with_backoff(path, params)
+        payload, tolerated = self._request_with_backoff(path, params, tolerate_statuses)
 
-        if cache_ttl:
+        if cache_ttl and not tolerated:
             self._redis.setex(cache_key, cache_ttl, json.dumps(payload))
         return payload
 
@@ -161,7 +166,9 @@ class RateLimitedClient:
                 )
             self._sleep(min(wait, 5.0))
 
-    def _request_with_backoff(self, path: str, params: dict[str, Any]) -> Any:
+    def _request_with_backoff(
+        self, path: str, params: dict[str, Any], tolerate_statuses: tuple[int, ...] = ()
+    ) -> tuple[Any, bool]:
         last_error: str = ""
         for attempt in range(MAX_ATTEMPTS):
             try:
@@ -176,13 +183,15 @@ class RateLimitedClient:
                 if attempt < MAX_ATTEMPTS - 1:
                     self._sleep(self._backoff_delay(attempt, resp.headers.get("Retry-After")))
                 continue
+            if resp.status_code in tolerate_statuses:
+                return resp.json(), True
             if resp.status_code in (401, 403):
                 raise ProviderAuthError(f"{self.provider}: HTTP {resp.status_code} — check API key")
             if resp.status_code >= 400:
                 raise ProviderError(
                     f"{self.provider}: HTTP {resp.status_code} for {path}: {resp.text[:200]}"
                 )
-            return resp.json()
+            return resp.json(), False
 
         if last_error.startswith("HTTP 429"):
             raise ProviderRateLimitError(f"{self.provider}: still 429 after {MAX_ATTEMPTS} tries")

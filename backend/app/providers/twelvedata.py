@@ -19,8 +19,19 @@ from app.schemas.common import AssetClass, Interval, Quote, SymbolInfo
 BASE_URL = "https://api.twelvedata.com"
 
 
+def _is_empty_range_error(payload: dict) -> bool:
+    """code 400 + 'No data is available' = the window simply has no finished bar yet
+    (e.g. re-ingesting before today's close) — an empty result, not a failure."""
+    return (
+        isinstance(payload, dict)
+        and payload.get("status") == "error"
+        and payload.get("code") == 400
+        and "no data is available" in payload.get("message", "").lower()
+    )
+
+
 def _raise_on_error_payload(payload: dict) -> None:
-    """Twelve Data reports errors as JSON with HTTP 200 — map them to our hierarchy."""
+    """Twelve Data reports errors as JSON (sometimes with HTTP 200) — map to our hierarchy."""
     if isinstance(payload, dict) and payload.get("status") == "error":
         code = payload.get("code")
         message = payload.get("message", "unknown error")
@@ -63,11 +74,14 @@ class TwelveDataProvider:
                 "apikey": self._api_key,
             },
             cache_ttl=TTL_DAILY_BARS,
+            tolerate_statuses=(400,),
         )
         return self._parse_ohlcv(payload)
 
     @staticmethod
     def _parse_ohlcv(payload: dict) -> pd.DataFrame:
+        if _is_empty_range_error(payload):
+            return empty_candles()
         _raise_on_error_payload(payload)
         values = payload.get("values") or []
         if not values:
