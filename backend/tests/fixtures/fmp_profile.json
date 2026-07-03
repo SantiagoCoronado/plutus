@@ -1,0 +1,8 @@
+[
+  {
+    "symbol": "AAPL", "companyName": "Apple Inc.", "marketCap": 4561230000000,
+    "sector": "Technology", "industry": "Consumer Electronics",
+    "website": "https://www.apple.com", "description": "Apple Inc. designs consumer electronics.",
+    "currency": "USD", "exchange": "NASDAQ"
+  }
+]

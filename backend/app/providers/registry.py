@@ -109,6 +109,62 @@ def search_providers() -> list[MarketDataProvider]:
     return providers
 
 
+def get_fundamentals_provider():
+    """FundamentalsProvider per PROVIDER_FUNDAMENTALS (cached under a prefixed key —
+    'finnhub'/'fmp' names must not collide with market-data provider instances)."""
+    settings = get_settings()
+    name = settings.provider_fundamentals
+    cache_key = f"fundamentals:{name}"
+    if cache_key in _instances:
+        return _instances[cache_key]
+    if name == "fmp":
+        from app.providers.fmp import BASE_URL as FMP_URL
+        from app.providers.fmp import FMPProvider
+
+        client = RateLimitedClient("fmp", FMP_URL, _shared_redis(), PROVIDER_LIMITS["fmp"])
+        provider = FMPProvider(client, settings.fmp_api_key)
+    elif name == "edgar":
+        from app.providers.edgar import BASE_URL as EDGAR_URL
+        from app.providers.edgar import USER_AGENT, EdgarProvider
+
+        headers = {"User-Agent": USER_AGENT}
+        client = RateLimitedClient(
+            "edgar", EDGAR_URL, _shared_redis(), PROVIDER_LIMITS["edgar"], default_headers=headers
+        )
+        ticker_client = RateLimitedClient(
+            "edgar",
+            "https://www.sec.gov",
+            _shared_redis(),
+            PROVIDER_LIMITS["edgar"],
+            default_headers=headers,
+        )
+        provider = EdgarProvider(client, ticker_client)
+    else:
+        raise ProviderNotConfigured(f"unknown fundamentals provider '{name}'")
+    _instances[cache_key] = provider
+    return provider
+
+
+def get_news_provider():
+    settings = get_settings()
+    name = settings.provider_news
+    cache_key = f"news:{name}"
+    if cache_key in _instances:
+        return _instances[cache_key]
+    if name == "finnhub":
+        from app.providers.finnhub import BASE_URL as FINNHUB_URL
+        from app.providers.finnhub import FinnhubNewsProvider
+
+        client = RateLimitedClient(
+            "finnhub", FINNHUB_URL, _shared_redis(), PROVIDER_LIMITS["finnhub"]
+        )
+        provider = FinnhubNewsProvider(client, settings.finnhub_api_key)
+    else:
+        raise ProviderNotConfigured(f"unknown news provider '{name}'")
+    _instances[cache_key] = provider
+    return provider
+
+
 def reset_registry() -> None:
     """Test hook: drop cached provider/redis instances."""
     global _redis

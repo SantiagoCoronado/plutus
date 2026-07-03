@@ -1,0 +1,4 @@
+[
+  { "date": "2025-09-27", "symbol": "AAPL", "fiscalYear": "2025", "operatingCashFlow": 122000000000, "capitalExpenditure": -13193000000, "freeCashFlow": 108807000000 },
+  { "date": "2024-09-28", "symbol": "AAPL", "fiscalYear": "2024", "operatingCashFlow": 118254000000, "capitalExpenditure": -9447000000, "freeCashFlow": 108807000000 }
+]

@@ -1,0 +1,16 @@
+[
+  {
+    "category": "company", "datetime": 1782864000, "headline": "Apple unveils new AI features",
+    "id": 101, "image": "", "related": "AAPL", "source": "Reuters",
+    "summary": "Apple announced...", "url": "https://example.com/apple-ai"
+  },
+  {
+    "category": "company", "datetime": 1782777600, "headline": "Apple supplier ramps production",
+    "id": 102, "image": "", "related": "AAPL", "source": "Bloomberg",
+    "summary": "Suppliers...", "url": "https://example.com/apple-supplier"
+  },
+  {
+    "category": "company", "datetime": 1782691200, "headline": "Broken item without url",
+    "id": 103, "image": "", "related": "AAPL", "source": "PR", "summary": "..."
+  }
+]

@@ -1,0 +1,14 @@
+[
+  {
+    "date": "2025-09-27", "symbol": "AAPL", "fiscalYear": "2025", "period": "FY",
+    "grossProfitMargin": 0.4691, "netProfitMargin": 0.2692, "returnOnEquity": 1.4534,
+    "debtToEquityRatio": 1.406, "priceToEarningsRatio": 34.21, "priceToSalesRatio": 9.21,
+    "currentRatio": 0.89
+  },
+  {
+    "date": "2024-09-28", "symbol": "AAPL", "fiscalYear": "2024", "period": "FY",
+    "grossProfitMargin": 0.4621, "netProfitMargin": 0.2397, "returnOnEquity": 1.6459,
+    "debtToEquityRatio": 1.872, "priceToEarningsRatio": 37.29, "priceToSalesRatio": 8.93,
+    "currentRatio": 0.87
+  }
+]

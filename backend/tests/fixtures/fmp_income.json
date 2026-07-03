@@ -1,0 +1,12 @@
+[
+  {
+    "date": "2025-09-27", "symbol": "AAPL", "reportedCurrency": "USD", "fiscalYear": "2025", "period": "FY",
+    "revenue": 416161000000, "grossProfit": 195223000000, "operatingIncome": 131000000000,
+    "netIncome": 112010000000, "eps": 7.51, "epsDiluted": 7.46, "ebitda": 141000000000
+  },
+  {
+    "date": "2024-09-28", "symbol": "AAPL", "reportedCurrency": "USD", "fiscalYear": "2024", "period": "FY",
+    "revenue": 391035000000, "grossProfit": 180683000000, "operatingIncome": 123216000000,
+    "netIncome": 93736000000, "eps": 6.11, "epsDiluted": 6.08, "ebitda": 134661000000
+  }
+]
