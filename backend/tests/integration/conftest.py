@@ -20,7 +20,7 @@ os.environ["TIINGO_API_KEY"] = "test-tiingo-key"
 os.environ["TWELVEDATA_API_KEY"] = "test-twelvedata-key"
 os.environ["COINGECKO_API_KEY"] = ""
 os.environ["PROVIDER_STOCKS"] = "tiingo"
-os.environ["PROVIDER_CRYPTO"] = "coingecko"
+os.environ["PROVIDER_CRYPTO"] = "binance"
 os.environ["PROVIDER_FOREX"] = "twelvedata"
 # ------------------------------------------------------------------------------
 
@@ -75,8 +75,14 @@ def clean_state(test_database):
 
     with session_scope() as session:
         session.execute(
-            sa.text("TRUNCATE ohlcv, ingestion_runs, assets RESTART IDENTITY CASCADE")
+            sa.text(
+                "TRUNCATE ohlcv, ingestion_runs, assets, asset_metrics, fundamentals, "
+                "watchlist_items, asset_notes, news_items RESTART IDENTITY CASCADE"
+            )
         )
+        # watchlists: keep the migration-seeded Default row, drop the rest
+        session.execute(sa.text("DELETE FROM watchlists WHERE name <> 'Default'"))
+        session.execute(sa.text("DELETE FROM watchlist_items"))
     _shared_redis().flushdb()
     reset_registry()
 
@@ -89,9 +95,9 @@ def mock_all_providers(respx_mock, *, tiingo_response=None):
         return_value=tiingo_response
         or httpx.Response(200, json=load_fixture("tiingo_daily.json"))
     )
-    respx_mock.get(
-        url__regex=r"https://api\.coingecko\.com/api/v3/coins/.+/market_chart/range.*"
-    ).mock(return_value=httpx.Response(200, json=load_fixture("coingecko_market_chart.json")))
+    respx_mock.get(url__regex=r"https://data-api\.binance\.vision/api/v3/klines.*").mock(
+        return_value=httpx.Response(200, json=load_fixture("binance_klines.json"))
+    )
     respx_mock.get(url__regex=r"https://api\.twelvedata\.com/time_series.*").mock(
         return_value=httpx.Response(200, json=load_fixture("twelvedata_time_series.json"))
     )

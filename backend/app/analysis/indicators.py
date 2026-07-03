@@ -84,7 +84,8 @@ def _bbands(df: pd.DataFrame) -> pd.DataFrame:
         elif col.startswith("BBP"):
             mapping[col] = "percent_b"
     out = raw.rename(columns=mapping)
-    return out[[c for c in ("bb_upper", "bb_middle", "bb_lower", "bb_width", "percent_b") if c in out]]
+    wanted = ("bb_upper", "bb_middle", "bb_lower", "bb_width", "percent_b")
+    return out[[c for c in wanted if c in out]]
 
 
 def _atr(df: pd.DataFrame) -> pd.DataFrame:

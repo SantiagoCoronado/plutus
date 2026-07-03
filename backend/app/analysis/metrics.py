@@ -63,8 +63,8 @@ def _fundamental_snapshot(session, asset: Asset) -> dict:
             latest = rows[0]
             for col in FUNDAMENTAL_SNAPSHOT_COLUMNS:
                 out[col] = getattr(latest, col)
-            if len(rows) == 2 and rows[1].revenue:
-                out["revenue_growth_yoy"] = float(latest.revenue / rows[1].revenue - 1) if latest.revenue else None
+            if len(rows) == 2 and rows[1].revenue and latest.revenue:
+                out["revenue_growth_yoy"] = float(latest.revenue / rows[1].revenue - 1)
         profile = (asset.meta or {}).get("profile", {})
         if profile.get("market_cap"):
             out["market_cap"] = float(profile["market_cap"])

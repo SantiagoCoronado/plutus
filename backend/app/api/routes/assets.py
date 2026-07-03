@@ -5,6 +5,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from app.analysis.resample import BUCKET_WIDTHS, resample_rows
 from app.api.deps import get_db
 from app.core.logging import get_logger
 from app.models import Asset, Ohlcv
@@ -109,8 +110,26 @@ def get_ohlcv(
     limit: int = Query(default=MAX_CANDLES, ge=1, le=MAX_CANDLES),
     db: Session = Depends(get_db),
 ):
+    """1d bars are stored; 1w/1M are resampled on read via time_bucket (the trailing
+    bucket includes the in-progress week/month — standard chart behavior)."""
     if db.get(Asset, asset_id) is None:
         raise HTTPException(status_code=404, detail="asset not found")
+
+    if interval.value in BUCKET_WIDTHS:
+        rows = resample_rows(db, asset_id, interval.value, start, end, limit)
+        candles = [
+            Candle(
+                ts=row.bucket,
+                open=row.open,
+                high=row.high,
+                low=row.low,
+                close=row.close,
+                volume=row.volume,
+            )
+            for row in rows
+        ]
+        return OhlcvResponse(asset_id=asset_id, interval=interval, candles=candles)
+
     query = (
         select(Ohlcv)
         .where(Ohlcv.asset_id == asset_id, Ohlcv.interval == interval.value)
