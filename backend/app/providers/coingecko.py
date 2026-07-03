@@ -95,6 +95,18 @@ class CoinGeckoProvider:
             raise ProviderError(f"coingecko: no quote for {symbol}")
         return Quote(symbol=symbol, price=float(entry["usd"]), currency="USD")
 
+    def get_markets(self, coin_ids: list[str]) -> list[dict]:
+        """Market snapshot (market_cap, rank, supply) for the metrics job's crypto extras."""
+        if not coin_ids:
+            return []
+        payload = self._client.get_json(
+            "/coins/markets",
+            {"vs_currency": "usd", "ids": ",".join(sorted(coin_ids)), "per_page": 250},
+            cache_ttl=600,
+            acquire_timeout=30.0,
+        )
+        return payload or []
+
     def search_symbols(self, query: str) -> list[SymbolInfo]:
         payload = self._client.get_json(
             "/search", {"query": query}, cache_ttl=TTL_SEARCH, acquire_timeout=3.0

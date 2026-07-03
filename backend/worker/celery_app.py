@@ -41,4 +41,17 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=3, minute=20),
         "args": ("stock",),
     },
+    # after all EOD jobs — snapshots read the bars written above
+    "metrics-refresh": {
+        "task": "worker.tasks.refresh_metrics",
+        "schedule": crontab(hour=3, minute=40),
+    },
+    "fundamentals-refresh": {
+        "task": "worker.tasks.refresh_fundamentals",
+        "schedule": crontab(hour=4, minute=0, day_of_week="sun"),
+    },
+    "news-pull": {
+        "task": "worker.tasks.pull_news",
+        "schedule": crontab(minute="*/15"),
+    },
 }

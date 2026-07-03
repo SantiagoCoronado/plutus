@@ -24,11 +24,13 @@ def list_runs(
 
 @router.post("/run", status_code=202)
 def trigger_run():
-    """Manual full EOD ingestion — the verification path for the Phase 1 gate."""
+    """Manual full pipeline: EOD ingestion chained into a metrics refresh."""
     try:
-        from worker.tasks import ingest_eod_all
+        from celery import chain
 
-        result = ingest_eod_all.delay()
+        from worker.tasks import ingest_eod_all, refresh_metrics
+
+        result = chain(ingest_eod_all.s(), refresh_metrics.s()).apply_async()
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=503, detail=f"could not enqueue ingestion (is redis/worker up?): {exc}"
