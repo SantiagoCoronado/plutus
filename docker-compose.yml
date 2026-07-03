@@ -1,0 +1,81 @@
+name: plutus
+
+x-backend-env: &backend-env
+  # Inside the compose network, db/redis hostnames replace the localhost values from .env
+  DATABASE_URL: postgresql://plutus:${POSTGRES_PASSWORD:-plutus}@db:5432/plutus
+  REDIS_URL: redis://redis:6379/0
+
+services:
+  db:
+    # Community (TSL) image — the -oss variant lacks compression, never switch to it
+    image: timescale/timescaledb:2.28.2-pg16
+    environment:
+      POSTGRES_USER: plutus
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-plutus}
+      POSTGRES_DB: plutus
+    ports:
+      # host 5433 (5432 is commonly taken by other local stacks); in-network stays db:5432
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U plutus -d plutus"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:8.0-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build: ./backend
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    env_file: .env
+    environment: *backend-env
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  worker:
+    build: ./backend
+    command: celery -A worker.celery_app worker -l info --concurrency=2
+    env_file: .env
+    environment: *backend-env
+    depends_on:
+      app:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  beat:
+    build: ./backend
+    command: celery -A worker.celery_app beat -l info --schedule /tmp/celerybeat-schedule
+    env_file: .env
+    environment: *backend-env
+    depends_on:
+      worker:
+        condition: service_started
+
+volumes:
+  pgdata:

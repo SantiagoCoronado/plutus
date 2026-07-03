@@ -1,0 +1,26 @@
+# Secrets
+.env
+*.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+*.egg-info/
+
+# Node
+node_modules/
+frontend/dist/
+
+# Celery
+celerybeat-schedule*
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
