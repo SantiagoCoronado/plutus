@@ -77,7 +77,8 @@ def clean_state(test_database):
         session.execute(
             sa.text(
                 "TRUNCATE ohlcv, ingestion_runs, assets, asset_metrics, fundamentals, "
-                "watchlist_items, asset_notes, news_items RESTART IDENTITY CASCADE"
+                "watchlist_items, asset_notes, news_items, screens, backtests "
+                "RESTART IDENTITY CASCADE"
             )
         )
         # watchlists: keep the migration-seeded Default row, drop the rest
