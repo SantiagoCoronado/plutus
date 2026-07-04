@@ -96,6 +96,9 @@ export default function App() {
             <NavLink to="/backtests" className={navClass}>
               Backtests
             </NavLink>
+            <NavLink to="/mandates" className={navClass}>
+              Mandates
+            </NavLink>
           </nav>
         </div>
         <div className="max-w-md flex-1">
