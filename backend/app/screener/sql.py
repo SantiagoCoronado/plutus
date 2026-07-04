@@ -7,6 +7,7 @@ pandas_eval.py reproduces exactly these semantics for backtests.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -71,6 +72,7 @@ def run_screen(
     node: Node,
     asset_class: str | None,
     limit: int = 200,
+    asset_ids: Sequence[int] | None = None,
 ) -> list[ScreenHit]:
     fields = sorted(referenced_fields(node))
     stmt = (
@@ -91,6 +93,8 @@ def run_screen(
     )
     if asset_class is not None:
         stmt = stmt.where(Asset.asset_class == asset_class)
+    if asset_ids is not None:
+        stmt = stmt.where(Asset.id.in_(asset_ids))
 
     hits = []
     for row in session.execute(stmt):

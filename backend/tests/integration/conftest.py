@@ -77,7 +77,8 @@ def clean_state(test_database):
         session.execute(
             sa.text(
                 "TRUNCATE ohlcv, ingestion_runs, assets, asset_metrics, fundamentals, "
-                "watchlist_items, asset_notes, news_items, screens, backtests "
+                "watchlist_items, asset_notes, news_items, screens, backtests, "
+                "mandates, scans, candidates, notifications "
                 "RESTART IDENTITY CASCADE"
             )
         )
