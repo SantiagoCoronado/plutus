@@ -161,6 +161,134 @@ export interface TrackAssetBody {
   meta?: Record<string, unknown>
 }
 
+// --- screener / backtests -------------------------------------------------------
+
+export type FilterLeaf = {
+  field: string
+  op: string
+  value?: number | [number, number] | { field: string } | null
+}
+export type FilterNode =
+  | FilterLeaf
+  | { all: FilterNode[] }
+  | { any: FilterNode[] }
+  | { not: FilterNode }
+
+export interface ScreenField {
+  name: string
+  backtestable: boolean
+  fundamental: boolean
+}
+
+export interface Screen {
+  id: number
+  name: string
+  description: string | null
+  asset_class: AssetClass | null
+  ast: FilterNode
+  created_at: string
+  updated_at: string
+}
+
+export interface ScreenHit {
+  asset_id: number
+  symbol: string
+  name: string
+  asset_class: AssetClass
+  as_of: string | null
+  values: Record<string, number | null>
+}
+
+export interface ScreenRunResult {
+  count: number
+  columns: string[]
+  results: ScreenHit[]
+}
+
+export interface AstErrorDetail {
+  path?: string
+  error: string
+  valid_fields?: string[]
+  valid_ops?: string[]
+}
+
+export interface BacktestStats {
+  cagr: number | null
+  sharpe: number | null
+  max_drawdown: number | null
+  win_rate: number | null
+  total_return: number | null
+  excess_return: number | null
+  n_trades: number
+  start: string | null
+  end: string | null
+  bars: number
+  benchmark: { cagr: number | null; total_return: number | null; max_drawdown: number | null } | null
+  benchmark_symbol?: string
+  universe_size?: number
+  rebalances?: number
+  holding_days?: number
+  symbol?: string
+}
+
+export interface BacktestSummary {
+  id: number
+  kind: 'screen' | 'strategy'
+  status: 'queued' | 'running' | 'done' | 'failed'
+  screen_id: number | null
+  stats: BacktestStats | null
+  error: string | null
+  created_at: string
+  finished_at: string | null
+}
+
+export interface Backtest extends BacktestSummary {
+  params: Record<string, unknown>
+  equity_curve: { portfolio: [string, number][]; benchmark: [string, number][] } | null
+  trade_list: unknown[] | null
+  artifact_path: string | null
+  started_at: string | null
+}
+
+export interface StrategyTrade {
+  entry_ts: string
+  exit_ts: string
+  entry_price: number | null
+  exit_price: number | null
+  pnl: number
+  pnl_pct: number | null
+  bars_held: number
+}
+
+export interface ScreenHolding {
+  date: string
+  symbols: string[]
+}
+
+export interface ScreenBacktestBody {
+  screen_id?: number
+  ast?: FilterNode
+  asset_class?: AssetClass
+  holding_days?: number
+  start?: string
+  end?: string
+  benchmark?: string
+  fees_pct?: number
+}
+
+export interface StrategyBacktestBody {
+  asset_id: number
+  entry: FilterNode
+  exit: FilterNode
+  stop_loss_pct?: number | null
+  take_profit_pct?: number | null
+  position_size_pct?: number
+  cash?: number
+  fees_pct?: number
+  start?: string
+  end?: string
+}
+
 // --- api ----------------------------------------------------------------------
 
 export const api = {
@@ -212,6 +340,41 @@ export const api = {
     }),
   removeWatchlistItem: (watchlistId: number, assetId: number) =>
     request<void>(`/watchlists/${watchlistId}/items/${assetId}`, { method: 'DELETE' }),
+
+  screenFields: () => request<ScreenField[]>('/screens/fields'),
+  screens: () => request<Screen[]>('/screens'),
+  createScreen: (body: {
+    name: string
+    description?: string | null
+    asset_class?: AssetClass | null
+    ast: FilterNode
+  }) => request<Screen>('/screens', { method: 'POST', body: JSON.stringify(body) }),
+  updateScreen: (
+    id: number,
+    body: { name: string; description?: string | null; asset_class?: AssetClass | null; ast: FilterNode },
+  ) => request<Screen>(`/screens/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteScreen: (id: number) => request<void>(`/screens/${id}`, { method: 'DELETE' }),
+  runScreen: (body: { ast: FilterNode; asset_class?: AssetClass | null; limit?: number }) =>
+    request<ScreenRunResult>('/screens/run', { method: 'POST', body: JSON.stringify(body) }),
+  runSavedScreen: (id: number) =>
+    request<ScreenRunResult>(`/screens/${id}/run`, { method: 'POST' }),
+
+  backtests: (kind?: 'screen' | 'strategy') =>
+    request<BacktestSummary[]>(`/backtests${kind ? `?kind=${kind}` : ''}`),
+  backtest: (id: number) => request<Backtest>(`/backtests/${id}`),
+  createScreenBacktest: (body: ScreenBacktestBody) =>
+    request<BacktestSummary>('/backtests/screen', { method: 'POST', body: JSON.stringify(body) }),
+  createStrategyBacktest: (body: StrategyBacktestBody) =>
+    request<BacktestSummary>('/backtests/strategy', { method: 'POST', body: JSON.stringify(body) }),
+  deleteBacktest: (id: number) => request<void>(`/backtests/${id}`, { method: 'DELETE' }),
+  backtestReportBlob: async (id: number): Promise<Blob> => {
+    const headers = new Headers()
+    const token = getToken()
+    if (token) headers.set('Authorization', `Bearer ${token}`)
+    const resp = await fetch(`${API_BASE}/backtests/${id}/report`, { headers })
+    if (!resp.ok) throw new ApiError(resp.status, await resp.text())
+    return resp.blob()
+  },
 }
 
 // --- shared formatting helpers -------------------------------------------------

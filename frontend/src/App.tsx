@@ -87,6 +87,12 @@ export default function App() {
             <NavLink to="/watchlists" className={navClass}>
               Watchlists
             </NavLink>
+            <NavLink to="/screener" className={navClass}>
+              Screener
+            </NavLink>
+            <NavLink to="/backtests" className={navClass}>
+              Backtests
+            </NavLink>
           </nav>
         </div>
         <div className="max-w-md flex-1">

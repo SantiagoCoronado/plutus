@@ -3,8 +3,11 @@ import { createRoot } from 'react-dom/client'
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 import './index.css'
 import App from './App.tsx'
+import BacktestDetail from './pages/BacktestDetail.tsx'
+import Backtests from './pages/Backtests.tsx'
 import Dashboard from './pages/Dashboard.tsx'
 import Research from './pages/Research.tsx'
+import Screener from './pages/Screener.tsx'
 import Watchlists from './pages/Watchlists.tsx'
 
 const router = createBrowserRouter([
@@ -15,6 +18,9 @@ const router = createBrowserRouter([
       { index: true, element: <Dashboard /> },
       { path: 'asset/:id', element: <Research /> },
       { path: 'watchlists', element: <Watchlists /> },
+      { path: 'screener', element: <Screener /> },
+      { path: 'backtests', element: <Backtests /> },
+      { path: 'backtests/:id', element: <BacktestDetail /> },
     ],
   },
 ])
