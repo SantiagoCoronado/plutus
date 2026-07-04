@@ -332,17 +332,7 @@ export default function MandateForm({
             )}
           </div>
           {rulesJson === null ? (
-            <>
-              <RuleBuilder rows={rows} fields={fields} onChange={setRows} />
-              <button
-                onClick={() =>
-                  setRows([...rows, { field: '', op: '>', value1: '', value2: '' }])
-                }
-                className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
-              >
-                + rule
-              </button>
-            </>
+            <RuleBuilder rows={rows} fields={fields} onChange={setRows} />
           ) : (
             <textarea
               value={rulesJson}

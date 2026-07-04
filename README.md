@@ -4,14 +4,14 @@ Self-hosted, single-user investment research, opportunity-discovery, and portfol
 hub for stocks/ETFs, crypto, and forex. **Research and analysis only — no trade execution,
 ever.** Full specification: `investment-hub-spec.md` (kept outside the repo).
 
-**Status: Phase 3 complete** — screener + backtesting (of 7 phases).
+**Status: Phase 4 complete** — autonomous discovery engine (of 7 phases).
 
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Docker stack, TimescaleDB, provider adapters, EOD ingestion, symbol API | ✅ |
 | 2 | Research core: charts, indicators, `asset_metrics`, watchlists, fundamentals, news, notes | ✅ |
 | 3 | Screener (filter AST) + backtesting (VectorBT / Backtrader + quantstats) | ✅ |
-| 4 | Autonomous discovery engine (mandates → scans → ranked inbox) | — |
+| 4 | Autonomous discovery engine (mandates → scans → ranked inbox + alerts) | ✅ |
 | 5 | Portfolio tracking (transactions, P&L, TWR/IRR, bank investments) | — |
 | 6 | Exchange sync, websockets, hardening | — |
 | 7 | AI research agent + MCP control plane | — |
@@ -99,6 +99,38 @@ Nightly ingestion runs via Celery Beat at 03:00/03:10/03:20 America/Mexico_City
 - Backtests run in the worker; `POST /backtests/{screen,strategy}` returns a pollable
   row (`queued → running → done|failed`).
 
+## Discovery engine (Phase 4)
+
+- **Mandates** (`/mandates`): standing scan instructions — a universe (whole class /
+  watchlist / market-cap floor / top-N by size), an optional screener-AST coarse filter,
+  a 5-field cron schedule (local time), per-signal weights, and alert settings. A beat
+  dispatcher checks every active mandate's cron every 5 minutes and enqueues due scans;
+  "Run now" triggers one immediately without moving the standing schedule.
+- **Scan funnel**: universe → coarse filter (one indexed query over `asset_metrics`) →
+  vectorized signal analysis over the full 5-year bar window → weighted 0–100 composite
+  score. A candidate needs `score ≥ min_score` *and* at least one triggered signal.
+  Fine analysis is DB + pandas only — scans never call providers, so rate budgets are
+  untouchable. A ~100-asset scan runs in about a second.
+- **Signal library** (`app/discovery/signals.py`): price breakout, trend cross (50/200),
+  oversold RSI, momentum vs peers (cross-sectional percentile), stretched below trend,
+  cheap vs own 5y history (annual fundamentals), unusual volume, crypto drawdown from
+  the all-time high, dip in an uptrend. Earnings surprise and forex rate-differential
+  are deferred (no data source on the free provider tiers).
+- **Auto-context**: every candidate ships its evidence — a metrics snapshot at trigger
+  time, a sparkline payload, and a *history check*: forward 5/20/60-day returns after
+  past triggers of the same signal on the same asset ("after 13 past signals: +3.1%
+  median 20-day move, 62% win rate").
+- **Research Inbox** (`/inbox`): ranked card queue, filterable by status / mandate /
+  class. Star/dismiss feed per-mandate hit-rate stats (starred ÷ voted) so weights can
+  be tuned by hand — deliberately no ML re-ranking.
+- **Dedup**: a scan never re-nominates an asset while its previous candidate is still
+  unreviewed, nor within the mandate's cooldown window (default 7 days).
+- **Alerts**: email (SMTP) and Telegram, both env-optional (`SMTP_*`, `TELEGRAM_*` in
+  `.env`). Instant mode sends one message per scan batching candidates above the alert
+  threshold; digest mode sends a daily 08:00 summary. Every attempt is audited in
+  `notifications`; `POST /api/v1/mandates/test-alert` (or the button on the Mandates
+  page) verifies channels.
+
 ## Notes & deliberate decisions
 
 - **Stocks store the adjusted series** (Tiingo `adj*` columns) so indicators are
@@ -120,7 +152,9 @@ Nightly ingestion runs via Celery Beat at 03:00/03:10/03:20 America/Mexico_City
   search 24h, fundamentals 24h, news 10m).
 - Beat schedule (America/Mexico_City): EOD 03:00/03:10/03:20 · metrics 06:30 ·
   news every 15 min · fundamentals Sun 06:30 (stalest-first, capped at 32 assets/run to
-  respect the FMP day budget — the ~100-stock universe rotates over ~3 weeks).
+  respect the FMP day budget — the ~100-stock universe rotates over ~3 weeks) ·
+  discovery dispatcher every 5 min · alert digest 08:00. Schedule mandates after 06:30
+  so scans read fresh metrics.
 - **The ~100-stock nightly ingestion paces at Tiingo's bucket (~80s/symbol, ≈2.3h)** —
   ingest tasks carry 4h Celery time limits, and the metrics beat runs after the window.
 - Backtest guardrails: point-in-time panels only (no forward-fill of signals), next-bar
