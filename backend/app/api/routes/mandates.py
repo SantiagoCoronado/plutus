@@ -157,6 +157,20 @@ def list_signals():
     ]
 
 
+@router.post("/test-alert")
+def test_alert(db: Session = Depends(get_db)):
+    """Send a test message to every configured channel — the SMTP verification hook."""
+    from app.discovery.notify import send_test_alert
+
+    results = send_test_alert(db)
+    if not results:
+        raise HTTPException(
+            status_code=400,
+            detail="no alert channel is configured — set SMTP_* or TELEGRAM_* in .env",
+        )
+    return {"results": results}
+
+
 @router.get("", response_model=list[MandateOut])
 def list_mandates(db: Session = Depends(get_db)):
     mandates = db.scalars(select(Mandate).order_by(Mandate.name)).all()

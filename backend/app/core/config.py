@@ -44,6 +44,19 @@ class Settings(BaseSettings):
     # quantstats HTML reports land here; compose mounts a shared volume on app+worker
     artifacts_dir: str = "./artifacts"
 
+    # --- Alerts (spec §6.5) — both channels optional; unconfigured channels are skipped.
+    # email is configured iff smtp_host + alert_email_to are set;
+    # telegram iff bot token + chat id are set.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_pass: str = ""
+    alert_email_to: str = ""
+    alert_email_from: str = ""  # falls back to smtp_user
+
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+
     @property
     def sqlalchemy_url(self) -> str:
         url = self.database_url

@@ -415,3 +415,136 @@ class TestCandidateApi:
             f"/api/v1/candidates/{listed[0]['id']}", json={"status": "nonsense"}, headers=AUTH
         )
         assert resp.status_code == 422
+
+
+class TestAlerts:
+    @pytest.fixture
+    def email_env(self, monkeypatch):
+        from app.core.config import get_settings
+
+        monkeypatch.setenv("SMTP_HOST", "smtp.test")
+        monkeypatch.setenv("ALERT_EMAIL_TO", "me@test.com")
+        get_settings.cache_clear()
+        yield
+        get_settings.cache_clear()
+
+    @pytest.fixture
+    def outbox(self, monkeypatch):
+        import smtplib
+
+        from tests.unit.test_discovery_notify import FakeSMTP
+
+        FakeSMTP.instances = []
+        monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
+        return FakeSMTP
+
+    def test_instant_scan_alert_sends_one_email(self, oversold_mandate, email_env, outbox):
+        from app.models import Notification
+
+        with session_scope() as session:
+            session.get(Mandate, oversold_mandate["mandate_id"]).notify = "instant"
+        execute_scan(new_scan(oversold_mandate["mandate_id"]))
+
+        assert len(outbox.instances) == 1
+        message = outbox.instances[0].sent[0]
+        assert "1 new idea" in message["Subject"]
+        assert "Oversold stocks" in message["Subject"]
+        assert "AAPL" in message.get_content()
+
+        with session_scope() as session:
+            note = session.query(Notification).one()
+            assert note.kind == "instant" and note.ok is True and note.channel == "email"
+            assert note.meta["candidate_ids"]
+
+    def test_alert_threshold_suppresses_low_scores(self, oversold_mandate, email_env, outbox):
+        with session_scope() as session:
+            mandate = session.get(Mandate, oversold_mandate["mandate_id"])
+            mandate.notify = "instant"
+            mandate.notify_min_score = 99.5
+        execute_scan(new_scan(oversold_mandate["mandate_id"]))
+        assert outbox.instances == []
+
+    def test_unconfigured_channels_never_fail_the_scan(self, oversold_mandate):
+        from app.models import Notification
+
+        with session_scope() as session:
+            session.get(Mandate, oversold_mandate["mandate_id"]).notify = "instant"
+        scan_id = new_scan(oversold_mandate["mandate_id"])
+        execute_scan(scan_id)
+        with session_scope() as session:
+            assert session.get(Scan, scan_id).status == "done"
+            assert session.query(Notification).count() == 0
+
+    def seed_digest_candidates(self):
+        assets = dict((symbol, asset_id) for asset_id, symbol in seed_assets())
+        with session_scope() as session:
+            for name, symbol, score in (
+                ("Crypto rebounds", "BTC", 88.0),
+                ("Stock dips", "AAPL", 61.0),
+            ):
+                mandate = Mandate(
+                    name=name,
+                    asset_class="crypto" if symbol == "BTC" else "stock",
+                    universe_def={"type": "class"},
+                    schedule="30 7 * * *",
+                    score_weights={"rsi_extreme": 1.0},
+                    notify="digest",
+                )
+                session.add(mandate)
+                session.flush()
+                session.add(
+                    Candidate(
+                        mandate_id=mandate.id,
+                        asset_id=assets[symbol],
+                        ts=datetime.now(UTC),
+                        score=score,
+                        signals=[{"key": "rsi_extreme", "label": "Oversold (RSI)",
+                                  "triggered": True}],
+                        context={},
+                    )
+                )
+
+    def test_digest_groups_mandates_and_advances_window(self, email_env, outbox):
+        from app.discovery.notify import send_digest
+
+        self.seed_digest_candidates()
+        assert send_digest() == 2
+        message = outbox.instances[0].sent[0]
+        assert "2 new ideas" in message["Subject"]
+        body = message.get_content()
+        assert "Crypto rebounds" in body and "Stock dips" in body
+        assert "BTC" in body and "AAPL" in body
+
+        # the window advanced: nothing new -> no second email
+        assert send_digest() == 0
+        assert len(outbox.instances) == 1
+
+    def test_failed_digest_does_not_advance_the_window(self, email_env, outbox, monkeypatch):
+        from app.discovery import notify as notify_module
+        from app.models import Notification
+
+        self.seed_digest_candidates()
+
+        def boom(subject, body):
+            raise ConnectionError("smtp down")
+
+        monkeypatch.setitem(notify_module.SENDERS, "email", boom)
+        send_count = notify_module.send_digest()
+        assert send_count == 2  # attempted
+        with session_scope() as session:
+            note = session.query(Notification).one()
+            assert note.ok is False and "smtp down" in note.error
+
+        # transport restored -> the same candidates are re-covered
+        monkeypatch.setitem(notify_module.SENDERS, "email", lambda s, b: None)
+        assert notify_module.send_digest() == 2
+
+    def test_test_alert_endpoint(self, client, email_env, outbox):
+        resp = client.post("/api/v1/mandates/test-alert", headers=AUTH)
+        assert resp.status_code == 200
+        assert resp.json()["results"] == [{"channel": "email", "ok": True, "error": None}]
+        assert "test alert" in outbox.instances[0].sent[0]["Subject"].lower()
+
+    def test_test_alert_endpoint_400_when_unconfigured(self, client):
+        resp = client.post("/api/v1/mandates/test-alert", headers=AUTH)
+        assert resp.status_code == 400
