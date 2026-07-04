@@ -44,9 +44,10 @@ def refresh_metrics(_prior_result=None) -> int:
     return run_metrics_refresh()
 
 
-@celery_app.task(name="worker.tasks.refresh_fundamentals")
+# 32 assets x 6 FMP calls at 8/min ~= 24 min — needs more than the global 30-min cap
+@celery_app.task(name="worker.tasks.refresh_fundamentals", **INGEST_LIMITS)
 def refresh_fundamentals() -> int:
-    """Weekly fundamentals refresh for stock/ETF assets."""
+    """Weekly fundamentals refresh for stock/ETF assets (stalest-first, budget-capped)."""
     from app.ingestion.fundamentals import run_fundamentals_refresh
 
     return run_fundamentals_refresh()

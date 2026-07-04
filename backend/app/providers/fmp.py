@@ -61,7 +61,8 @@ class FMPProvider:
         return payload or []
 
     def get_fundamentals(
-        self, symbol: str, period: str = "annual", limit: int = 6
+        # limit hard-capped at 5 on the FMP free tier (HTTP 402 above it, verified 2026-07)
+        self, symbol: str, period: str = "annual", limit: int = 5
     ) -> list[FundamentalsPeriod]:
         self._require_key()
         raw = {
@@ -97,7 +98,8 @@ class FMPProvider:
                     fcf=_pick(cashflow, "freeCashFlow"),
                     gross_margin=_pick(ratios, "grossProfitMargin"),
                     net_margin=_pick(ratios, "netProfitMargin"),
-                    roe=_pick(ratios, "returnOnEquity"),
+                    # stable API moved returnOnEquity to key-metrics (verified 2026-07)
+                    roe=_pick(key_metrics, "returnOnEquity") or _pick(ratios, "returnOnEquity"),
                     debt_to_equity=_pick(ratios, "debtToEquityRatio", "debtEquityRatio"),
                     pe=_pick(ratios, "priceToEarningsRatio", "priceEarningsRatio"),
                     ps=_pick(ratios, "priceToSalesRatio"),
