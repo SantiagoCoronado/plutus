@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
+import { NavLink, Outlet } from 'react-router-dom'
 import { api, getToken, setToken, type HealthStatus } from './api/client'
-import Dashboard from './pages/Dashboard'
+import SearchBox from './components/SearchBox'
 
 function HealthBadge() {
   const [health, setHealth] = useState<HealthStatus | null>(null)
@@ -27,13 +28,12 @@ function HealthBadge() {
       : health
         ? 'bg-amber-500'
         : 'bg-zinc-600'
-  const label = failed ? 'api unreachable' : (health?.status ?? 'connecting…')
+  const label = failed ? 'api unreachable' : (health?.status ?? '…')
 
   return (
-    <span className="flex items-center gap-2 text-sm text-zinc-400">
+    <span className="flex items-center gap-2 text-xs text-zinc-400" title={`db:${health?.db} redis:${health?.redis}`}>
       <span className={`inline-block h-2.5 w-2.5 rounded-full ${color}`} />
       {label}
-      {health && <span className="text-zinc-600">db:{health.db} redis:{health.redis}</span>}
     </span>
   )
 }
@@ -57,37 +57,55 @@ function TokenInput() {
         value={value}
         onChange={(e) => setValue(e.target.value)}
         placeholder="API token"
-        className="w-44 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm text-zinc-200 placeholder-zinc-600 focus:border-zinc-500 focus:outline-none"
+        className="w-36 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200 placeholder-zinc-600 focus:border-zinc-500 focus:outline-none"
       />
       <button
         type="submit"
-        className="rounded border border-zinc-700 px-2 py-1 text-sm text-zinc-300 hover:bg-zinc-800"
+        className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
       >
-        {saved ? 'saved ✓' : 'save'}
+        {saved ? '✓' : 'save'}
       </button>
     </form>
   )
 }
 
+const navClass = ({ isActive }: { isActive: boolean }) =>
+  `rounded px-3 py-1.5 text-sm ${isActive ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'}`
+
 export default function App() {
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      <header className="flex items-center justify-between border-b border-zinc-800 px-6 py-3">
-        <div className="flex items-center gap-3">
-          <h1 className="text-lg font-semibold tracking-wide">Plutus</h1>
-          <span className="text-xs text-zinc-500">investment hub</span>
+    <div className="flex min-h-screen flex-col bg-zinc-950 text-zinc-100">
+      <header className="flex items-center justify-between gap-4 border-b border-zinc-800 px-6 py-3">
+        <div className="flex items-center gap-5">
+          <NavLink to="/" className="text-lg font-semibold tracking-wide">
+            Plutus
+          </NavLink>
+          <nav className="flex items-center gap-1">
+            <NavLink to="/" end className={navClass}>
+              Dashboard
+            </NavLink>
+            <NavLink to="/watchlists" className={navClass}>
+              Watchlists
+            </NavLink>
+          </nav>
         </div>
-        <div className="flex items-center gap-6">
+        <div className="max-w-md flex-1">
+          <SearchBox />
+        </div>
+        <div className="flex items-center gap-4">
           <TokenInput />
           <HealthBadge />
         </div>
       </header>
-      <main className="p-6">
-        <Dashboard />
+      <main className="flex-1 p-6">
+        <Outlet />
       </main>
       <footer className="px-6 py-4 text-xs text-zinc-600">
-        Market data by Tiingo, CoinGecko and Twelve Data. Informational only — not financial
-        advice.
+        Market data by Tiingo, Binance, Twelve Data, FMP, Finnhub — crypto metadata powered by{' '}
+        <a href="https://www.coingecko.com" target="_blank" rel="noopener" className="underline">
+          CoinGecko
+        </a>
+        . Informational only — not financial advice.
       </footer>
     </div>
   )
