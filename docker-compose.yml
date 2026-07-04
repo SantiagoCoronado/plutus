@@ -4,6 +4,8 @@ x-backend-env: &backend-env
   # Inside the compose network, db/redis hostnames replace the localhost values from .env
   DATABASE_URL: postgresql://plutus:${POSTGRES_PASSWORD:-plutus}@db:5432/plutus
   REDIS_URL: redis://redis:6379/0
+  # shared volume: the worker writes quantstats reports, the API serves them
+  ARTIFACTS_DIR: /srv/artifacts
 
 services:
   db:
@@ -42,6 +44,8 @@ services:
     ports:
       # host 8800 (8000 is commonly taken by other local stacks); in-container stays 8000
       - "8800:8000"
+    volumes:
+      - artifacts:/srv/artifacts
     depends_on:
       db:
         condition: service_healthy
@@ -63,6 +67,8 @@ services:
     command: celery -A worker.celery_app worker -l info --concurrency=2
     env_file: .env
     environment: *backend-env
+    volumes:
+      - artifacts:/srv/artifacts
     depends_on:
       app:
         condition: service_healthy
@@ -80,3 +86,4 @@ services:
 
 volumes:
   pgdata:
+  artifacts:

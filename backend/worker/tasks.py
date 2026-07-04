@@ -66,3 +66,11 @@ def pull_news() -> int:
     from app.ingestion.news import run_news_pull
 
     return run_news_pull()
+
+
+@celery_app.task(name="worker.tasks.run_backtest")
+def run_backtest(backtest_id: int) -> int:
+    """Execute a queued backtest row (screen or strategy); the UI polls the row."""
+    from app.backtest.runner import execute_backtest
+
+    return execute_backtest(backtest_id)

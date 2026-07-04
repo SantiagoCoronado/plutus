@@ -24,3 +24,6 @@ celerybeat-schedule*
 .DS_Store
 .idea/
 .vscode/
+
+# Backtest artifacts (quantstats HTML reports; containers use a named volume)
+backend/artifacts/
