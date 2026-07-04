@@ -41,14 +41,15 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=3, minute=20),
         "args": ("stock",),
     },
-    # after all EOD jobs — snapshots read the bars written above
+    # after all EOD jobs — snapshots read the bars written above. The ~100-stock
+    # universe paces at Tiingo's bucket (~80s/symbol), so eod-stocks finishes ~05:40.
     "metrics-refresh": {
         "task": "worker.tasks.refresh_metrics",
-        "schedule": crontab(hour=3, minute=40),
+        "schedule": crontab(hour=6, minute=30),
     },
     "fundamentals-refresh": {
         "task": "worker.tasks.refresh_fundamentals",
-        "schedule": crontab(hour=4, minute=0, day_of_week="sun"),
+        "schedule": crontab(hour=6, minute=30, day_of_week="sun"),
     },
     "news-pull": {
         "task": "worker.tasks.pull_news",

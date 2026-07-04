@@ -37,7 +37,12 @@ class Settings(BaseSettings):
     benchmark_crypto: str = "BTC"
     benchmark_forex: str = "UUP"  # DXY is paid-gated on Twelve Data free (verified 404)
 
-    initial_backfill_days: int = 730
+    # ~5y: leaves a usable backtest window after the 300-bar indicator warmup.
+    # Tiingo/Twelve Data serve the whole window in one request; Binance paginates.
+    initial_backfill_days: int = 1825
+
+    # quantstats HTML reports land here; compose mounts a shared volume on app+worker
+    artifacts_dir: str = "./artifacts"
 
     @property
     def sqlalchemy_url(self) -> str:
