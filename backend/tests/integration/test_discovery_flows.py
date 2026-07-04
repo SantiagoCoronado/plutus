@@ -1,9 +1,10 @@
-"""Phase 4 integration: mandate scans end-to-end, dedup, and the beat dispatcher."""
+"""Phase 4 integration: mandate scans end-to-end, dedup, dispatcher, and the API."""
 
 from datetime import UTC, datetime, timedelta
 
 import numpy as np
 import pytest
+from fastapi.testclient import TestClient
 
 from app.analysis.metrics import _upsert_metrics
 from app.core.db import session_scope
@@ -11,10 +12,29 @@ from app.discovery.runner import dispatch_due_mandates, execute_scan
 from app.ingestion.eod import upsert_candles
 from app.ingestion.seed import seed_assets
 from app.models import Candidate, Mandate, Scan
+from tests.integration.conftest import TEST_TOKEN
 
 pytestmark = pytest.mark.integration
 
+AUTH = {"Authorization": f"Bearer {TEST_TOKEN}"}
 N_BARS = 400
+
+VALID_MANDATE = {
+    "name": "Oversold large caps",
+    "asset_class": "stock",
+    "universe_def": {"type": "class"},
+    "rules": {"field": "rsi_14", "op": "<", "value": 45},
+    "schedule": "30 7 * * 1-5",
+    "score_weights": {"rsi_extreme": 2.0, "mean_reversion": 1.0},
+}
+
+
+@pytest.fixture
+def client():
+    from app.main import create_app
+
+    with TestClient(create_app()) as test_client:
+        yield test_client
 
 
 def seed_bars(session, asset_id: int, closes: np.ndarray, with_volume: bool = True) -> None:
@@ -250,3 +270,148 @@ class TestDispatcher:
             assert session.get(Mandate, mandate_id).last_run_at > datetime.now(UTC) - timedelta(
                 minutes=5
             )
+
+
+class TestMandateApi:
+    def test_crud_lifecycle(self, client):
+        created = client.post("/api/v1/mandates", json=VALID_MANDATE, headers=AUTH)
+        assert created.status_code == 201, created.text
+        body = created.json()
+        mandate_id = body["id"]
+        assert body["next_run_at"] is not None
+        assert body["stats"] == {
+            "candidates_total": 0,
+            "new": 0,
+            "starred": 0,
+            "dismissed": 0,
+            "hit_rate": None,
+        }
+
+        assert client.post("/api/v1/mandates", json=VALID_MANDATE, headers=AUTH).status_code == 409
+
+        listed = client.get("/api/v1/mandates", headers=AUTH).json()
+        assert [m["name"] for m in listed] == ["Oversold large caps"]
+
+        updated = client.put(
+            f"/api/v1/mandates/{mandate_id}",
+            json={**VALID_MANDATE, "min_score": 55.0, "notify": "digest"},
+            headers=AUTH,
+        )
+        assert updated.status_code == 200
+        assert updated.json()["min_score"] == 55.0
+
+        patched = client.patch(
+            f"/api/v1/mandates/{mandate_id}", json={"active": False}, headers=AUTH
+        )
+        assert patched.status_code == 200
+        assert patched.json()["active"] is False
+
+        assert client.delete(f"/api/v1/mandates/{mandate_id}", headers=AUTH).status_code == 204
+        assert client.get(f"/api/v1/mandates/{mandate_id}", headers=AUTH).status_code == 404
+
+    @pytest.mark.parametrize(
+        ("override", "expected_path"),
+        [
+            ({"schedule": "not a cron"}, "schedule"),
+            ({"score_weights": {"bogus_signal": 1.0}}, "score_weights.bogus_signal"),
+            ({"score_weights": {"crypto_drawdown": 1.0}}, "score_weights.crypto_drawdown"),
+            ({"score_weights": {"rsi_extreme": 0.0}}, "score_weights"),
+            ({"rules": {"field": "bogus", "op": ">", "value": 1}}, "rules"),
+            (
+                {"universe_def": {"type": "watchlist", "watchlist_id": 999}},
+                "universe_def.watchlist_id",
+            ),
+        ],
+    )
+    def test_validation_renders_per_path_errors(self, client, override, expected_path):
+        resp = client.post("/api/v1/mandates", json={**VALID_MANDATE, **override}, headers=AUTH)
+        assert resp.status_code == 422, resp.text
+        errors = resp.json()["detail"]["errors"]
+        assert any(str(e.get("path", "")).startswith(expected_path) for e in errors), errors
+
+    def test_signals_endpoint_describes_the_registry(self, client):
+        resp = client.get("/api/v1/mandates/signals", headers=AUTH)
+        assert resp.status_code == 200
+        by_key = {s["key"]: s for s in resp.json()}
+        assert by_key["volume_anomaly"]["needs_volume"] is True
+        assert by_key["momentum_rank"]["supports_history_check"] is False
+        assert "crypto" in by_key["crypto_drawdown"]["asset_classes"]
+
+    def test_run_now_creates_pollable_scan(self, client, oversold_mandate, monkeypatch):
+        import worker.tasks
+
+        monkeypatch.setattr(worker.tasks.run_scan, "delay", lambda scan_id: None)
+        mandate_id = oversold_mandate["mandate_id"]
+
+        created = client.post(f"/api/v1/mandates/{mandate_id}/scan", headers=AUTH)
+        assert created.status_code == 201
+        scan_id = created.json()["id"]
+        assert created.json()["status"] == "queued"
+
+        # a second run-now while one is in flight is refused
+        assert client.post(f"/api/v1/mandates/{mandate_id}/scan", headers=AUTH).status_code == 409
+
+        execute_scan(scan_id)
+        scans = client.get(f"/api/v1/mandates/{mandate_id}/scans", headers=AUTH).json()
+        assert scans[0]["id"] == scan_id
+        assert scans[0]["status"] == "done"
+        assert scans[0]["stats"]["created"] == 1
+
+        # manual runs never move the standing schedule
+        mandate = client.get(f"/api/v1/mandates/{mandate_id}", headers=AUTH).json()
+        assert mandate["last_run_at"] is None
+
+
+class TestCandidateApi:
+    @pytest.fixture
+    def with_candidates(self, oversold_mandate):
+        execute_scan(new_scan(oversold_mandate["mandate_id"]))
+        return oversold_mandate
+
+    def test_inbox_list_patch_and_summary(self, client, with_candidates):
+        listed = client.get("/api/v1/candidates", headers=AUTH).json()
+        assert len(listed) == 1
+        candidate = listed[0]
+        assert candidate["symbol"] == "AAPL"
+        assert candidate["mandate_name"] == "Oversold stocks"
+        assert candidate["status"] == "new"
+        assert candidate["signals"][0]["triggered"] is True
+        assert "chart" in candidate["context"]
+
+        starred = client.patch(
+            f"/api/v1/candidates/{candidate['id']}", json={"status": "starred"}, headers=AUTH
+        )
+        assert starred.status_code == 200
+        assert starred.json()["status"] == "starred"
+
+        assert client.get("/api/v1/candidates?status=new", headers=AUTH).json() == []
+        assert (
+            len(client.get("/api/v1/candidates?status=starred", headers=AUTH).json()) == 1
+        )
+        assert (
+            client.get("/api/v1/candidates?asset_class=crypto", headers=AUTH).json() == []
+        )
+
+        summary = client.get("/api/v1/candidates/summary", headers=AUTH).json()
+        assert summary["by_status"]["starred"] == 1
+        assert summary["by_mandate"][0]["hit_rate"] == 1.0
+
+        # the mandate list embeds the same hit-rate stats
+        mandates = client.get("/api/v1/mandates", headers=AUTH).json()
+        target = next(
+            m for m in mandates if m["id"] == with_candidates["mandate_id"]
+        )
+        assert target["stats"]["starred"] == 1
+        assert target["stats"]["hit_rate"] == 1.0
+        assert target["last_scan"]["status"] == "done"
+
+    def test_patch_unknown_candidate_404s(self, client):
+        resp = client.patch("/api/v1/candidates/999", json={"status": "starred"}, headers=AUTH)
+        assert resp.status_code == 404
+
+    def test_bad_status_value_is_rejected(self, client, with_candidates):
+        listed = client.get("/api/v1/candidates", headers=AUTH).json()
+        resp = client.patch(
+            f"/api/v1/candidates/{listed[0]['id']}", json={"status": "nonsense"}, headers=AUTH
+        )
+        assert resp.status_code == 422
