@@ -75,3 +75,27 @@ def run_backtest(backtest_id: int) -> int:
     from app.backtest.runner import execute_backtest
 
     return execute_backtest(backtest_id)
+
+
+@celery_app.task(name="worker.tasks.run_scan")
+def run_scan(scan_id: int) -> int:
+    """Execute a queued mandate scan; the UI polls the row."""
+    from app.discovery.runner import execute_scan
+
+    return execute_scan(scan_id)
+
+
+@celery_app.task(name="worker.tasks.dispatch_scans")
+def dispatch_scans() -> list[int]:
+    """Beat dispatcher: enqueue scans for active mandates whose cron has come due."""
+    from app.discovery.runner import dispatch_due_mandates
+
+    return dispatch_due_mandates()
+
+
+@celery_app.task(name="worker.tasks.send_alert_digest")
+def send_alert_digest() -> int:
+    """Daily summary of new candidates for mandates set to digest mode."""
+    from app.discovery.notify import send_digest
+
+    return send_digest()

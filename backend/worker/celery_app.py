@@ -55,4 +55,15 @@ celery_app.conf.beat_schedule = {
         "task": "worker.tasks.pull_news",
         "schedule": crontab(minute="*/15"),
     },
+    # checks every active mandate's cron and enqueues due scans
+    "discovery-dispatcher": {
+        "task": "worker.tasks.dispatch_scans",
+        "schedule": crontab(minute="*/5"),
+    },
+    # after the 06:30 metrics refresh and the default 07:30 mandate preset,
+    # so the daily summary covers the same morning's scans
+    "alert-digest": {
+        "task": "worker.tasks.send_alert_digest",
+        "schedule": crontab(hour=8, minute=0),
+    },
 }
