@@ -289,6 +289,147 @@ export interface StrategyBacktestBody {
   end?: string
 }
 
+// --- discovery types -----------------------------------------------------------
+
+export type CandidateStatus = 'new' | 'reviewed' | 'starred' | 'dismissed'
+export type NotifyMode = 'off' | 'instant' | 'digest'
+
+export type UniverseDef =
+  | { type: 'class' }
+  | { type: 'watchlist'; watchlist_id: number }
+  | { type: 'market_cap_floor'; min_market_cap: number }
+  | { type: 'top_by_market_cap'; count: number }
+
+export interface MandateStats {
+  candidates_total: number
+  new: number
+  starred: number
+  dismissed: number
+  hit_rate: number | null
+}
+
+export interface LastScan {
+  id: number
+  status: string
+  finished_at: string | null
+  error: string | null
+}
+
+export interface Mandate {
+  id: number
+  name: string
+  description: string | null
+  asset_class: AssetClass
+  universe_def: UniverseDef
+  rules: FilterNode | null
+  schedule: string
+  score_weights: Record<string, number>
+  min_score: number
+  notify_min_score: number | null
+  max_candidates: number
+  cooldown_days: number
+  notify: NotifyMode
+  active: boolean
+  last_run_at: string | null
+  created_at: string
+  updated_at: string
+  next_run_at: string | null
+  stats: MandateStats | null
+  last_scan: LastScan | null
+}
+
+export interface MandateBody {
+  name: string
+  description?: string | null
+  asset_class: AssetClass
+  universe_def: UniverseDef
+  rules?: FilterNode | null
+  schedule: string
+  score_weights: Record<string, number>
+  min_score?: number
+  notify_min_score?: number | null
+  max_candidates?: number
+  cooldown_days?: number
+  notify?: NotifyMode
+  active?: boolean
+}
+
+export interface Scan {
+  id: number
+  mandate_id: number
+  status: 'queued' | 'running' | 'done' | 'failed'
+  stats: Record<string, unknown> | null
+  error: string | null
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+}
+
+export interface SignalInfo {
+  key: string
+  label: string
+  description: string
+  asset_classes: AssetClass[]
+  needs_volume: boolean
+  supports_history_check: boolean
+}
+
+export interface CandidateSignal {
+  key: string
+  label: string
+  score: number
+  weight: number
+  triggered: boolean
+  evidence: Record<string, unknown>
+}
+
+export interface HistoryHorizon {
+  n: number
+  median: number
+  win_rate: number | null
+}
+
+export interface HistoryCheck {
+  n_triggers: number
+  fwd: Record<string, HistoryHorizon>
+}
+
+export interface CandidateContext {
+  snapshot?: Record<string, number | string | null>
+  history_check?: Record<string, HistoryCheck>
+  chart?: [string, number][]
+}
+
+export interface Candidate {
+  id: number
+  mandate_id: number
+  mandate_name: string
+  asset_id: number
+  symbol: string
+  name: string
+  asset_class: AssetClass
+  ts: string
+  score: number
+  status: CandidateStatus
+  signals: CandidateSignal[]
+  context: CandidateContext
+  created_at: string
+}
+
+export interface MandateCandidateSummary {
+  mandate_id: number
+  mandate_name: string
+  new: number
+  starred: number
+  dismissed: number
+  hit_rate: number | null
+}
+
+export interface CandidateSummary {
+  by_status: Record<CandidateStatus, number>
+  by_mandate: MandateCandidateSummary[]
+}
+
 // --- api ----------------------------------------------------------------------
 
 export const api = {
@@ -367,6 +508,50 @@ export const api = {
   createStrategyBacktest: (body: StrategyBacktestBody) =>
     request<BacktestSummary>('/backtests/strategy', { method: 'POST', body: JSON.stringify(body) }),
   deleteBacktest: (id: number) => request<void>(`/backtests/${id}`, { method: 'DELETE' }),
+  mandates: () => request<Mandate[]>('/mandates'),
+  mandate: (id: number) => request<Mandate>(`/mandates/${id}`),
+  createMandate: (body: MandateBody) =>
+    request<Mandate>('/mandates', { method: 'POST', body: JSON.stringify(body) }),
+  updateMandate: (id: number, body: MandateBody) =>
+    request<Mandate>(`/mandates/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  patchMandate: (id: number, body: { active?: boolean; notify?: NotifyMode }) =>
+    request<Mandate>(`/mandates/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteMandate: (id: number) => request<void>(`/mandates/${id}`, { method: 'DELETE' }),
+  runMandate: (id: number) => request<Scan>(`/mandates/${id}/scan`, { method: 'POST' }),
+  mandateScans: (id: number, limit = 20) =>
+    request<Scan[]>(`/mandates/${id}/scans?limit=${limit}`),
+  discoverySignals: () => request<SignalInfo[]>('/mandates/signals'),
+  testAlert: () =>
+    request<{ results: { channel: string; ok: boolean; error: string | null }[] }>(
+      '/mandates/test-alert',
+      { method: 'POST' },
+    ),
+
+  candidates: (
+    params: {
+      status?: CandidateStatus | ''
+      mandate_id?: number | ''
+      asset_class?: AssetClass | ''
+      order?: 'score' | 'newest'
+      limit?: number
+    } = {},
+  ) => {
+    const query = new URLSearchParams()
+    if (params.status) query.set('status', params.status)
+    if (params.mandate_id) query.set('mandate_id', String(params.mandate_id))
+    if (params.asset_class) query.set('asset_class', params.asset_class)
+    if (params.order) query.set('order', params.order)
+    if (params.limit) query.set('limit', String(params.limit))
+    const qs = query.toString()
+    return request<Candidate[]>(`/candidates${qs ? `?${qs}` : ''}`)
+  },
+  candidatesSummary: () => request<CandidateSummary>('/candidates/summary'),
+  patchCandidate: (id: number, status: CandidateStatus) =>
+    request<Candidate>(`/candidates/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    }),
+
   backtestReportBlob: async (id: number): Promise<Blob> => {
     const headers = new Headers()
     const token = getToken()
