@@ -6,6 +6,8 @@ x-backend-env: &backend-env
   REDIS_URL: redis://redis:6379/0
   # shared volume: the worker writes quantstats reports, the API serves them
   ARTIFACTS_DIR: /srv/artifacts
+  # the claude-subscription provider's sidecar (see the agent-sidecar service)
+  CLAUDE_SIDECAR_URL: http://agent-sidecar:8787
 
 services:
   db:
@@ -83,6 +85,31 @@ services:
     depends_on:
       worker:
         condition: service_started
+
+  # claude-subscription LLM provider (spec §13.1): wraps the claude agent SDK on
+  # the user's Claude plan. Deliberately NOT a dependency of anything — if it's
+  # down, only the claude-subscription option in Settings degrades.
+  # NEVER add ANTHROPIC_API_KEY to this environment (it would silently switch
+  # billing from subscription to API; the server also deletes it defensively).
+  agent-sidecar:
+    build: ./sidecar
+    environment:
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      PLUTUS_API_URL: http://app:8000
+      PLUTUS_API_TOKEN: ${APP_AUTH_TOKEN}
+      PORT: "8787"
+    ports:
+      # exposed for native-dev backends (CLAUDE_SIDECAR_URL=http://localhost:8787)
+      - "8787:8787"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://localhost:8787/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
 volumes:
   pgdata:

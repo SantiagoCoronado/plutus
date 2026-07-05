@@ -1,0 +1,15 @@
+{
+  "name": "plutus-agent-sidecar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "claude-subscription provider for Plutus: wraps @anthropic-ai/claude-agent-sdk behind a tiny HTTP/SSE service",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.201",
+    "zod": "^4.0.0"
+  }
+}
