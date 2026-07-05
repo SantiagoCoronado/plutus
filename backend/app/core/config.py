@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
+    # remind this many days before a fixed-term bank investment matures (spec §7.4)
+    maturity_reminder_days: int = 7
+
     @property
     def sqlalchemy_url(self) -> str:
         url = self.database_url

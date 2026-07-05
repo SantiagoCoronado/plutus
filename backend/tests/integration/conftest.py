@@ -78,7 +78,8 @@ def clean_state(test_database):
             sa.text(
                 "TRUNCATE ohlcv, ingestion_runs, assets, asset_metrics, fundamentals, "
                 "watchlist_items, asset_notes, news_items, screens, backtests, "
-                "mandates, scans, candidates, notifications "
+                "mandates, scans, candidates, notifications, "
+                "accounts, transactions, bank_investments "
                 "RESTART IDENTITY CASCADE"
             )
         )

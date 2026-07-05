@@ -39,6 +39,15 @@ SEED_ASSETS: list[dict] = [
         "currency": "USD",
         "metadata": {"provider_symbols": {"twelvedata": "EUR/USD"}},
     },
+    # feeds the portfolio's peso conversion (app/portfolio/fx.py reads forex closes)
+    {
+        "symbol": "USDMXN",
+        "name": "US Dollar / Mexican Peso",
+        "asset_class": "forex",
+        "exchange": None,
+        "currency": "MXN",
+        "metadata": {"provider_symbols": {"twelvedata": "USD/MXN"}},
+    },
 ]
 
 # Benchmarks for relative strength (spec §5.3) — ordinary tracked assets, ingested by

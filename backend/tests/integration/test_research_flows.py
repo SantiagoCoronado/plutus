@@ -78,7 +78,7 @@ class TestMetricsRefresh:
                 )
             ).all()
         by_symbol = {r.symbol: r for r in rows}
-        assert len(by_symbol) == 5
+        assert len(by_symbol) == 6
         # forex: volume metrics NULL, price metrics present
         eurusd = by_symbol["EURUSD"]
         assert eurusd.rsi_14 is not None
@@ -96,7 +96,7 @@ class TestMetricsRefresh:
         run_metrics()
         with session_scope() as session:
             second = session.execute(sa.text("SELECT count(*) FROM asset_metrics")).scalar()
-        assert first == second == 5
+        assert first == second == 6
 
 
 class TestResampling:

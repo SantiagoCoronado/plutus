@@ -12,7 +12,7 @@ from tests.integration.conftest import mock_all_providers
 pytestmark = pytest.mark.integration
 
 # golden fixtures: tiingo 3 bars (AAPL/SPY/UUP), binance 4 klines, twelvedata 3 bars
-EXPECTED_BARS = {"AAPL": 3, "BTC": 4, "EURUSD": 3, "SPY": 3, "UUP": 3}
+EXPECTED_BARS = {"AAPL": 3, "BTC": 4, "EURUSD": 3, "USDMXN": 3, "SPY": 3, "UUP": 3}
 
 
 def bar_counts() -> dict[str, int]:

@@ -230,7 +230,10 @@ class TestDispatcher:
 
     def test_not_due_and_inactive_mandates_are_untouched(self, monkeypatch):
         seed_assets()
-        just_ran = datetime.now(UTC) - timedelta(seconds=30)
+        # anchor to the current 5-minute window: "now - 30s" straddles a cron
+        # boundary once every ten runs, making the mandate genuinely due
+        now = datetime.now(UTC)
+        just_ran = now.replace(minute=now.minute - now.minute % 5, second=0, microsecond=0)
         self.make_mandate("fresh", just_ran)
         with session_scope() as session:
             inactive = Mandate(
