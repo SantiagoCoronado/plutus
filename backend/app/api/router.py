@@ -2,13 +2,16 @@ from fastapi import APIRouter, Depends
 
 from app.api.deps import require_auth
 from app.api.routes import (
+    accounts,
     assets,
     backtests,
+    bank_investments,
     candidates,
     ingestion,
     mandates,
     research,
     screens,
+    transactions,
     watchlists,
 )
 
@@ -20,6 +23,9 @@ api_router.include_router(screens.router)
 api_router.include_router(backtests.router)
 api_router.include_router(mandates.router)
 api_router.include_router(candidates.router)
+api_router.include_router(accounts.router)
+api_router.include_router(transactions.router)
+api_router.include_router(bank_investments.router)
 api_router.include_router(ingestion.router)
 
 
