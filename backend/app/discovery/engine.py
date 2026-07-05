@@ -62,9 +62,15 @@ def run_mandate_scan(session: Session, mandate: Mandate, scan_id: int | None = N
 
     momentum = _momentum_context(session, universe_ids)
     metrics_map = _metrics_map(session, survivor_ids)
-    valuations = (
-        _valuation_history(session, survivor_ids)
-        if "valuation_anomaly" in weights and mandate.asset_class == "stock"
+    fundamentals = (
+        _fundamentals_history(session, survivor_ids)
+        if weights.keys() & {"valuation_anomaly", "financial_health"}
+        and mandate.asset_class == "stock"
+        else {}
+    )
+    quality = (
+        _quality_value_context(session, universe_ids)
+        if "quality_value" in weights and mandate.asset_class == "stock"
         else {}
     )
 
@@ -89,11 +95,17 @@ def run_mandate_scan(session: Session, mandate: Mandate, scan_id: int | None = N
         as_of = last_bar if as_of is None else max(as_of, last_bar)
 
         ctx = dict(momentum.get(asset_id, {}))
+        ctx.update(quality.get(asset_id, {}))
         metrics = metrics_map.get(asset_id)
         if metrics is not None:
             ctx["valuation_current"] = {"pe": metrics.get("pe"), "ps": metrics.get("ps")}
-        if asset_id in valuations:
-            ctx["valuation_history"] = valuations[asset_id]
+        if asset_id in fundamentals:
+            rows = fundamentals[asset_id]
+            ctx["fundamentals_history"] = rows
+            ctx["valuation_history"] = {
+                "pe": [row["pe"] for row in rows if row["pe"] is not None],
+                "ps": [row["ps"] for row in rows if row["ps"] is not None],
+            }
 
         results: dict[str, SignalResult] = {}
         for key in weights:
@@ -212,24 +224,101 @@ def _metrics_map(session: Session, asset_ids: list[int]) -> dict[int, dict[str, 
     }
 
 
-def _valuation_history(
-    session: Session, asset_ids: list[int]
-) -> dict[int, dict[str, list[float]]]:
+def _fundamentals_history(session: Session, asset_ids: list[int]) -> dict[int, list[dict]]:
+    """Annual fundamentals rows per asset, oldest first — one query feeds both
+    valuation_anomaly (pe/ps series) and financial_health (full statements)."""
     if not asset_ids:
         return {}
     rows = session.execute(
-        select(Fundamentals.asset_id, Fundamentals.pe, Fundamentals.ps)
+        select(
+            Fundamentals.asset_id,
+            Fundamentals.report_date,
+            Fundamentals.fiscal_year,
+            Fundamentals.revenue,
+            Fundamentals.eps,
+            Fundamentals.fcf,
+            Fundamentals.gross_margin,
+            Fundamentals.net_margin,
+            Fundamentals.roe,
+            Fundamentals.debt_to_equity,
+            Fundamentals.pe,
+            Fundamentals.ps,
+            Fundamentals.metrics,
+        )
         .where(Fundamentals.asset_id.in_(asset_ids), Fundamentals.period == "annual")
         .order_by(Fundamentals.asset_id, Fundamentals.report_date)
     ).all()
-    history: dict[int, dict[str, list[float]]] = {}
-    for asset_id, pe, ps in rows:
-        entry = history.setdefault(asset_id, {"pe": [], "ps": []})
-        if pe is not None:
-            entry["pe"].append(pe)
-        if ps is not None:
-            entry["ps"].append(ps)
+    history: dict[int, list[dict]] = {}
+    for row in rows:
+        history.setdefault(row.asset_id, []).append(
+            {
+                "report_date": row.report_date,
+                "fiscal_year": row.fiscal_year,
+                "revenue": row.revenue,
+                "eps": row.eps,
+                "fcf": row.fcf,
+                "gross_margin": row.gross_margin,
+                "net_margin": row.net_margin,
+                "roe": row.roe,
+                "debt_to_equity": row.debt_to_equity,
+                "pe": row.pe,
+                "ps": row.ps,
+                "raw": row.metrics or {},
+            }
+        )
     return history
+
+
+def _quality_value_context(
+    session: Session, universe_ids: list[int]
+) -> dict[int, dict[str, Any]]:
+    """Magic-Formula-style context vs the whole universe: percentile-rank
+    earnings yield (1/pe from the nightly snapshot) and return on invested
+    capital (latest annual statements, roe fallback), then average the two."""
+    if not universe_ids:
+        return {}
+    metric_rows = session.execute(
+        select(AssetMetrics.asset_id, AssetMetrics.pe, AssetMetrics.roe).where(
+            AssetMetrics.asset_id.in_(universe_ids)
+        )
+    ).all()
+
+    fundamental_rows = session.execute(
+        select(Fundamentals.asset_id, Fundamentals.metrics)
+        .where(Fundamentals.asset_id.in_(universe_ids), Fundamentals.period == "annual")
+        .order_by(Fundamentals.asset_id, Fundamentals.report_date)
+    ).all()
+    capital_returns: dict[int, float] = {}
+    for asset_id, metrics in fundamental_rows:  # ordered: the last row per asset wins
+        value = ((metrics or {}).get("key_metrics") or {}).get("returnOnInvestedCapital")
+        if isinstance(value, int | float):
+            capital_returns[asset_id] = float(value)
+
+    pairs: dict[int, tuple[float, float]] = {}
+    for asset_id, pe, roe in metric_rows:
+        if pe is None or pe <= 0:
+            continue
+        capital_return = capital_returns.get(asset_id, roe)
+        if capital_return is None:
+            continue
+        pairs[asset_id] = (1.0 / pe, float(capital_return))
+    if len(pairs) < MIN_MOMENTUM_PEERS:
+        return {}
+
+    yields = sorted(ey for ey, _ in pairs.values())
+    returns = sorted(roc for _, roc in pairs.values())
+    top = len(pairs) - 1
+    context: dict[int, dict[str, Any]] = {}
+    for asset_id, (earnings_yield, capital_return) in pairs.items():
+        yield_pct = (bisect_right(yields, earnings_yield) - 1) / top if top else 1.0
+        return_pct = (bisect_right(returns, capital_return) - 1) / top if top else 1.0
+        context[asset_id] = {
+            "quality_value_percentile": (yield_pct + return_pct) / 2,
+            "quality_value_earnings_yield": earnings_yield,
+            "quality_value_return_on_capital": capital_return,
+            "quality_value_peers": len(pairs),
+        }
+    return context
 
 
 def _latest_candidates(

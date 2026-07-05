@@ -37,6 +37,8 @@ CROSS_MAX_AGE = 10
 MIN_MOMENTUM_PEERS = 10
 # valuation_anomaly needs at least this many positive annual data points per metric
 MIN_VALUATION_HISTORY = 3
+# financial_health needs at least this many answerable checks to say anything
+MIN_HEALTH_CHECKS = 5
 
 
 def clip01(x: float) -> float:
@@ -226,6 +228,140 @@ def _valuation_anomaly(df: pd.DataFrame, ctx: Mapping[str, Any]) -> SignalResult
     )
 
 
+def _num(value: Any) -> float | None:
+    """Coerce a raw statement field to a finite float, else None."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if np.isnan(number) or np.isinf(number):
+        return None
+    return number
+
+
+def _raw_field(row: Mapping[str, Any], statement: str, field: str) -> float | None:
+    raw = row.get("raw") or {}
+    section = raw.get(statement) or {}
+    return _num(section.get(field))
+
+
+def _financial_health(df: pd.DataFrame, ctx: Mapping[str, Any]) -> SignalResult | None:
+    """Piotroski-style checkup over the last two annual statements. Every check
+    that can't be answered from stored data is skipped, not failed; the signal
+    goes unavailable below MIN_HEALTH_CHECKS answerable checks."""
+    history: list[Mapping[str, Any]] = list(ctx.get("fundamentals_history") or [])
+    if len(history) < 2:
+        return None
+    y1, y0 = history[-2], history[-1]  # prior year, latest year
+
+    def delta(metric: str) -> float | None:
+        now, past = _num(y0.get(metric)), _num(y1.get(metric))
+        if now is None or past is None:
+            return None
+        return now - past
+
+    def roa(row: Mapping[str, Any]) -> float | None:
+        income = _raw_field(row, "income", "netIncome")
+        assets = _raw_field(row, "balance", "totalAssets")
+        if income is None or assets is None or assets == 0:
+            return None
+        return income / assets
+
+    def turnover(row: Mapping[str, Any]) -> float | None:
+        revenue = _num(row.get("revenue"))
+        assets = _raw_field(row, "balance", "totalAssets")
+        if revenue is None or assets is None or assets == 0:
+            return None
+        return revenue / assets
+
+    net_income = _raw_field(y0, "income", "netIncome")
+    operating_cf = _raw_field(y0, "cashflow", "operatingCashFlow")
+    checks: dict[str, bool | None] = {}
+
+    checks["profitable"] = (
+        net_income > 0
+        if net_income is not None
+        else (_num(y0.get("eps")) > 0 if _num(y0.get("eps")) is not None else None)
+    )
+    checks["cash_generating"] = (
+        operating_cf > 0
+        if operating_cf is not None
+        else (_num(y0.get("fcf")) > 0 if _num(y0.get("fcf")) is not None else None)
+    )
+    roa_now, roa_past = roa(y0), roa(y1)
+    if roa_now is not None and roa_past is not None:
+        checks["returns_improving"] = roa_now > roa_past
+    else:
+        roe_delta = delta("roe")
+        checks["returns_improving"] = roe_delta > 0 if roe_delta is not None else None
+    checks["earnings_backed_by_cash"] = (
+        operating_cf > net_income
+        if operating_cf is not None and net_income is not None
+        else None
+    )
+    debt_delta = delta("debt_to_equity")
+    checks["debt_falling"] = debt_delta < 0 if debt_delta is not None else None
+    ratio_now = _raw_field(y0, "ratios", "currentRatio")
+    ratio_past = _raw_field(y1, "ratios", "currentRatio")
+    checks["liquidity_improving"] = (
+        ratio_now > ratio_past if ratio_now is not None and ratio_past is not None else None
+    )
+    shares_now = _raw_field(y0, "income", "weightedAverageShsOut")
+    shares_past = _raw_field(y1, "income", "weightedAverageShsOut")
+    checks["no_dilution"] = (
+        shares_now <= shares_past * 1.01
+        if shares_now is not None and shares_past is not None and shares_past > 0
+        else None
+    )
+    margin_delta = delta("gross_margin")
+    checks["margins_improving"] = margin_delta > 0 if margin_delta is not None else None
+    turn_now, turn_past = turnover(y0), turnover(y1)
+    if turn_now is not None and turn_past is not None:
+        checks["sales_efficiency_up"] = turn_now > turn_past
+    else:
+        revenue_delta = delta("revenue")
+        checks["sales_efficiency_up"] = revenue_delta > 0 if revenue_delta is not None else None
+
+    answered = {name: passed for name, passed in checks.items() if passed is not None}
+    if len(answered) < MIN_HEALTH_CHECKS:
+        return None
+    passed = sum(answered.values())
+    score = round(100 * passed / len(answered), 1)
+    return SignalResult(
+        score=score,
+        triggered=score >= 75,
+        evidence={
+            "passed": passed,
+            "evaluable": len(answered),
+            "checks": answered,
+            "skipped": sorted(name for name, value in checks.items() if value is None),
+            "fiscal_years": [y1.get("fiscal_year"), y0.get("fiscal_year")],
+        },
+        mask=None,
+    )
+
+
+def _quality_value(df: pd.DataFrame, ctx: Mapping[str, Any]) -> SignalResult | None:
+    """Cross-sectional Magic-Formula-style rank: earnings yield x return on
+    capital percentile vs the mandate's universe; computed by the engine."""
+    percentile = ctx.get("quality_value_percentile")
+    if percentile is None:
+        return None
+    return SignalResult(
+        score=round(100 * float(percentile), 1),
+        triggered=float(percentile) >= 0.8,
+        evidence={
+            "percentile": _safe(percentile),
+            "earnings_yield": _safe(ctx.get("quality_value_earnings_yield")),
+            "return_on_capital": _safe(ctx.get("quality_value_return_on_capital")),
+            "peers": ctx.get("quality_value_peers"),
+        },
+        mask=None,
+    )
+
+
 def _volume_anomaly(df: pd.DataFrame, ctx: Mapping[str, Any]) -> SignalResult | None:
     vol_z = _volume_z(df)
     if vol_z is None:
@@ -346,6 +482,32 @@ SIGNALS: dict[str, SignalSpec] = {
             asset_classes=("stock",),
             min_bars=0,
             compute=_valuation_anomaly,
+            supports_history_check=False,
+        ),
+        SignalSpec(
+            key="financial_health",
+            label="Financially healthy",
+            description=(
+                "Piotroski-style checkup from the last two annual statements: profits, "
+                "cash flow, debt, margins and share count all moving the right way. "
+                "Unavailable until two years of statements are on record."
+            ),
+            asset_classes=("stock",),
+            min_bars=0,
+            compute=_financial_health,
+            supports_history_check=False,
+        ),
+        SignalSpec(
+            key="quality_value",
+            label="Quality at a fair price",
+            description=(
+                "Magic-Formula-style rank: earnings yield and return on capital vs the "
+                f"universe; needs at least {MIN_MOMENTUM_PEERS} peers with data."
+            ),
+            asset_classes=("stock",),
+            min_bars=0,
+            compute=_quality_value,
+            cross_sectional=True,
             supports_history_check=False,
         ),
         SignalSpec(

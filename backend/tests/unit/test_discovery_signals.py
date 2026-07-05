@@ -318,3 +318,186 @@ def test_composite_score_ignores_zero_weights_and_handles_empty():
     results = {"a": make_result(80.0)}
     assert composite_score(results, {"a": 0.0}) is None
     assert composite_score({}, {"a": 1.0}) is None
+
+
+# ---------------------------------------------------- financial_health
+
+
+def health_row(
+    *,
+    fiscal_year=2025,
+    revenue=100.0,
+    eps=5.0,
+    fcf=20.0,
+    gross_margin=0.45,
+    roe=0.30,
+    debt_to_equity=1.0,
+    net_income=25.0,
+    operating_cf=30.0,
+    total_assets=200.0,
+    current_ratio=1.2,
+    shares=1000.0,
+) -> dict:
+    return {
+        "report_date": None,
+        "fiscal_year": fiscal_year,
+        "revenue": revenue,
+        "eps": eps,
+        "fcf": fcf,
+        "gross_margin": gross_margin,
+        "net_margin": None,
+        "roe": roe,
+        "debt_to_equity": debt_to_equity,
+        "pe": 20.0,
+        "ps": 5.0,
+        "raw": {
+            "income": {"netIncome": net_income, "weightedAverageShsOut": shares},
+            "cashflow": {"operatingCashFlow": operating_cf},
+            "balance": {"totalAssets": total_assets},
+            "ratios": {"currentRatio": current_ratio},
+        },
+    }
+
+
+def health_ctx(prior: dict, latest: dict) -> dict:
+    return {"fundamentals_history": [prior, latest]}
+
+
+def test_financial_health_all_nine_pass():
+    prior = health_row(fiscal_year=2024)
+    latest = health_row(
+        fiscal_year=2025,
+        revenue=120.0,        # turnover up (same assets)
+        net_income=30.0,      # profitable, ROA up
+        operating_cf=40.0,    # cash generating, > net income
+        debt_to_equity=0.8,   # falling
+        current_ratio=1.5,    # improving
+        shares=990.0,         # buyback, no dilution
+        gross_margin=0.50,    # improving
+    )
+    result = SIGNALS["financial_health"].compute(pd.DataFrame(), health_ctx(prior, latest))
+    assert result is not None
+    assert result.score == 100.0
+    assert result.triggered
+    assert result.evidence["passed"] == result.evidence["evaluable"] == 9
+    assert result.mask is None
+
+
+def test_financial_health_mixed_hand_scored():
+    prior = health_row(fiscal_year=2024)
+    latest = health_row(
+        fiscal_year=2025,
+        revenue=90.0,          # turnover down            FAIL
+        net_income=-5.0,       # unprofitable, ROA down   FAIL x2
+        operating_cf=10.0,     # positive PASS, > NI PASS x2
+        debt_to_equity=1.5,    # rising                   FAIL
+        current_ratio=1.5,     # improving                PASS
+        shares=1100.0,         # diluted                  FAIL
+        gross_margin=0.50,     # improving                PASS
+    )
+    result = SIGNALS["financial_health"].compute(pd.DataFrame(), health_ctx(prior, latest))
+    # passes: cash_generating, earnings_backed_by_cash, liquidity_improving,
+    # margins_improving = 4 of 9
+    assert result.evidence["passed"] == 4
+    assert result.evidence["evaluable"] == 9
+    assert result.score == pytest.approx(44.4, abs=0.1)
+    assert not result.triggered
+
+
+def test_financial_health_missing_shares_skips_that_check_only():
+    prior = health_row(fiscal_year=2024)
+    latest = health_row(fiscal_year=2025, revenue=120.0, net_income=30.0,
+                        operating_cf=40.0, debt_to_equity=0.8, current_ratio=1.5,
+                        gross_margin=0.50)
+    for row in (prior, latest):
+        del row["raw"]["income"]["weightedAverageShsOut"]
+    result = SIGNALS["financial_health"].compute(pd.DataFrame(), health_ctx(prior, latest))
+    assert result.evidence["evaluable"] == 8
+    assert "no_dilution" in result.evidence["skipped"]
+    assert result.score == 100.0
+
+
+def test_financial_health_falls_back_to_normalized_columns():
+    # raw statements absent entirely: eps/fcf/roe/debt/margin/revenue answer 6 checks
+    prior = health_row(fiscal_year=2024)
+    latest = health_row(
+        fiscal_year=2025, revenue=120.0, roe=0.35, debt_to_equity=0.8, gross_margin=0.5
+    )
+    for row in (prior, latest):
+        row["raw"] = {}
+    result = SIGNALS["financial_health"].compute(pd.DataFrame(), health_ctx(prior, latest))
+    assert result is not None
+    assert result.evidence["evaluable"] == 6
+    assert sorted(result.evidence["skipped"]) == [
+        "earnings_backed_by_cash",
+        "liquidity_improving",
+        "no_dilution",
+    ]
+    assert result.score == 100.0
+
+
+def test_financial_health_unavailable_below_minimums():
+    # one year of history
+    assert (
+        SIGNALS["financial_health"].compute(
+            pd.DataFrame(), {"fundamentals_history": [health_row()]}
+        )
+        is None
+    )
+    # two years but almost nothing answerable (< MIN_HEALTH_CHECKS)
+    empty_prior = {k: None for k in health_row()} | {"raw": {}}
+    empty_latest = {k: None for k in health_row()} | {"raw": {}, "eps": 5.0}
+    assert (
+        SIGNALS["financial_health"].compute(
+            pd.DataFrame(), health_ctx(empty_prior, empty_latest)
+        )
+        is None
+    )
+    # no ctx at all
+    assert SIGNALS["financial_health"].compute(pd.DataFrame(), {}) is None
+
+
+# ------------------------------------------------------- quality_value
+
+
+def test_quality_value_reads_engine_context():
+    result = SIGNALS["quality_value"].compute(
+        pd.DataFrame(),
+        {
+            "quality_value_percentile": 0.9,
+            "quality_value_earnings_yield": 0.08,
+            "quality_value_return_on_capital": 0.31,
+            "quality_value_peers": 42,
+        },
+    )
+    assert result.score == 90.0
+    assert result.triggered
+    assert result.evidence["peers"] == 42
+    assert result.evidence["earnings_yield"] == pytest.approx(0.08)
+
+
+def test_quality_value_below_threshold_not_triggered():
+    result = SIGNALS["quality_value"].compute(
+        pd.DataFrame(), {"quality_value_percentile": 0.5}
+    )
+    assert result.score == 50.0
+    assert not result.triggered
+
+
+def test_quality_value_unavailable_without_context():
+    assert SIGNALS["quality_value"].compute(pd.DataFrame(), {}) is None
+
+
+def test_fundamentals_signals_registered_for_stocks_only():
+    stock_keys = {spec.key for spec in applicable_signals("stock")}
+    crypto_keys = {spec.key for spec in applicable_signals("crypto")}
+    assert {"financial_health", "quality_value"} <= stock_keys
+    assert not {"financial_health", "quality_value"} & crypto_keys
+    assert composite_score(
+        {
+            "financial_health": SIGNALS["financial_health"].compute(
+                pd.DataFrame(), health_ctx(health_row(fiscal_year=2024), health_row())
+            )
+        },
+        {"financial_health": 1.0},
+    ) is not None

@@ -551,3 +551,127 @@ class TestAlerts:
     def test_test_alert_endpoint_400_when_unconfigured(self, client):
         resp = client.post("/api/v1/mandates/test-alert", headers=AUTH)
         assert resp.status_code == 400
+
+
+class TestFundamentalsSignals:
+    """Phase 5: a mandate can score candidates on financial health + quality."""
+
+    def seed_stock(self, session, symbol: str, *, pe: float, roe: float,
+                   healthy: bool) -> int:
+        from datetime import date
+
+        from app.models import Asset, Fundamentals
+
+        asset = Asset(
+            symbol=symbol, name=f"{symbol} Corp", asset_class="stock", currency="USD"
+        )
+        session.add(asset)
+        session.flush()
+        seed_bars(session, asset.id, np.linspace(90, 100, N_BARS))
+        _upsert_metrics(
+            session,
+            asset.id,
+            {"as_of": datetime.now(UTC).date(), "close": 100.0, "pe": pe, "roe": roe},
+        )
+        for year, factor in ((2024, 1.0), (2025, 1.2 if healthy else 0.8)):
+            session.add(
+                Fundamentals(
+                    asset_id=asset.id,
+                    period="annual",
+                    report_date=date(year, 9, 30),
+                    fiscal_year=year,
+                    provider="fmp",
+                    revenue=1000.0 * factor,
+                    eps=5.0 * factor,
+                    fcf=200.0 * factor,
+                    gross_margin=0.40 * factor,
+                    net_margin=0.20,
+                    roe=roe * factor,
+                    debt_to_equity=1.0 / factor,
+                    pe=pe,
+                    ps=4.0,
+                    metrics={
+                        "income": {
+                            "netIncome": 250.0 * factor,
+                            "weightedAverageShsOut": 1000.0 / factor,
+                        },
+                        "cashflow": {"operatingCashFlow": 300.0 * factor},
+                        "balance": {"totalAssets": 2000.0},
+                        "ratios": {"currentRatio": 1.2 * factor},
+                        "key_metrics": {"returnOnInvestedCapital": roe},
+                    },
+                )
+            )
+        return asset.id
+
+    @pytest.fixture
+    def fundamentals_universe(self):
+        seed_assets()
+        with session_scope() as session:
+            # one obviously healthy-and-cheap stock among 11 mediocre peers
+            star = self.seed_stock(session, "STAR", pe=8.0, roe=0.35, healthy=True)
+            for i in range(11):
+                self.seed_stock(
+                    session, f"BLND{i:02d}", pe=30.0 + i, roe=0.05, healthy=False
+                )
+        return star
+
+    def test_scan_scores_fundamental_health(self, client, fundamentals_universe):
+        response = client.post(
+            "/api/v1/mandates",
+            json={
+                "name": "Sound businesses",
+                "asset_class": "stock",
+                "universe_def": {"type": "class"},
+                "schedule": "30 7 * * 1-5",
+                "score_weights": {"financial_health": 2.0, "quality_value": 1.0},
+                "min_score": 60.0,
+                "notify": "off",
+            },
+            headers=AUTH,
+        )
+        assert response.status_code == 201, response.text
+        mandate_id = response.json()["id"]
+
+        execute_scan(new_scan(mandate_id))
+
+        listed = client.get(
+            "/api/v1/candidates", params={"mandate_id": mandate_id}, headers=AUTH
+        ).json()
+        assert listed, "the healthy cheap stock should be nominated"
+        top = listed[0]
+        assert top["symbol"] == "STAR"
+        by_key = {s["key"]: s for s in top["signals"]}
+        health = by_key["financial_health"]
+        assert health["score"] == 100.0
+        assert health["triggered"] is True
+        assert health["evidence"]["checks"]["profitable"] is True
+        assert health["evidence"]["passed"] == health["evidence"]["evaluable"]
+        quality = by_key["quality_value"]
+        assert quality["triggered"] is True
+        assert quality["evidence"]["peers"] == 12
+
+    def test_fundamental_weights_rejected_for_crypto(self, client):
+        response = client.post(
+            "/api/v1/mandates",
+            json={
+                "name": "Crypto health?",
+                "asset_class": "crypto",
+                "universe_def": {"type": "class"},
+                "schedule": "30 7 * * 1-5",
+                "score_weights": {"financial_health": 1.0},
+            },
+            headers=AUTH,
+        )
+        assert response.status_code == 422
+        [error] = response.json()["detail"]["errors"]
+        assert error["path"] == "score_weights.financial_health"
+        assert "does not apply to crypto" in error["error"]
+
+    def test_signals_endpoint_lists_the_new_pack(self, client):
+        listed = client.get("/api/v1/mandates/signals", headers=AUTH).json()
+        by_key = {s["key"]: s for s in listed}
+        assert by_key["financial_health"]["label"] == "Financially healthy"
+        assert by_key["quality_value"]["label"] == "Quality at a fair price"
+        assert by_key["financial_health"]["asset_classes"] == ["stock"]
+        assert by_key["financial_health"]["supports_history_check"] is False
