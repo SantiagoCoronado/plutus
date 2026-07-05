@@ -167,6 +167,7 @@ class PositionOut(BaseModel):
     asset_class: str | None
     quantity: float
     average_cost_native: float | None
+    cost_currency: str | None = None
     native_currency: str
     last_price: float | None
     market_value_native: float | None

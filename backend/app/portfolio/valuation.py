@@ -143,6 +143,8 @@ def compute_positions(
                 "asset_class": asset.asset_class if asset else None,
                 "quantity": quantity,
                 "average_cost_native": average_cost(lots),
+                # lots bought in MXN against a USD-quoted asset keep MXN costs
+                "cost_currency": lots[0].currency,
                 "native_currency": native_ccy,
                 "last_price": close,
                 "market_value_native": _round(market_value_native),

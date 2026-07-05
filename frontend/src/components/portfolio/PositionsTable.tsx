@@ -64,7 +64,9 @@ export default function PositionsTable({
                 </td>
                 <td className="px-3 py-2 text-right font-mono text-xs text-zinc-400">
                   {fmtMoney(position.average_cost_native)}
-                  <span className="ml-1 text-zinc-600">{position.native_currency}</span>
+                  <span className="ml-1 text-zinc-600">
+                    {position.cost_currency ?? position.native_currency}
+                  </span>
                 </td>
                 <td className="px-3 py-2 text-right font-mono text-xs text-zinc-400">
                   {fmtMoney(position.last_price)}

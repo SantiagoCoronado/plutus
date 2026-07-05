@@ -48,7 +48,7 @@ HEADER_HINTS: dict[str, tuple[str, ...]] = {
     "symbol": ("symbol", "ticker", "asset", "major", "coin", "instrumento"),
     "currency": ("currency", "minor", "moneda", "divisa"),
     "quantity": ("quantity", "amount", "monto", "cantidad", "units", "shares"),
-    "price": ("price", "rate", "precio", "tasa"),
+    "price": ("price", "rate", "precio"),
     "fees": ("fee", "commission", "comisión", "comision"),
     "external_id": ("tid", "id", "reference", "folio", "order"),
     "note": ("note", "description", "descripción", "concepto"),

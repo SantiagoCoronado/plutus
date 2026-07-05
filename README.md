@@ -4,7 +4,7 @@ Self-hosted, single-user investment research, opportunity-discovery, and portfol
 hub for stocks/ETFs, crypto, and forex. **Research and analysis only — no trade execution,
 ever.** Full specification: `investment-hub-spec.md` (kept outside the repo).
 
-**Status: Phase 4 complete** — autonomous discovery engine (of 7 phases).
+**Status: Phase 5 complete** — portfolio tracking + fundamentals signal pack (of 7 phases).
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -12,7 +12,7 @@ ever.** Full specification: `investment-hub-spec.md` (kept outside the repo).
 | 2 | Research core: charts, indicators, `asset_metrics`, watchlists, fundamentals, news, notes | ✅ |
 | 3 | Screener (filter AST) + backtesting (VectorBT / Backtrader + quantstats) | ✅ |
 | 4 | Autonomous discovery engine (mandates → scans → ranked inbox + alerts) | ✅ |
-| 5 | Portfolio tracking (transactions, P&L, TWR/IRR, bank investments) + fundamentals signal pack | — |
+| 5 | Portfolio tracking (transactions, P&L, TWR/IRR, bank investments) + fundamentals signal pack | ✅ |
 | 6 | AI research agent (candidate memos, strategy-from-content translator) + MCP control plane | — |
 | 7 | Exchange sync, live quotes, per-asset price alerts, hardening | — |
 
@@ -131,6 +131,36 @@ Nightly ingestion runs via Celery Beat at 03:00/03:10/03:20 America/Mexico_City
   `notifications`; `POST /api/v1/mandates/test-alert` (or the button on the Mandates
   page) verifies channels.
 
+## Portfolio tracking (Phase 5)
+
+- **Transactions are the source of truth** (`/portfolio`): positions, lots, and P&L are
+  derived on every read — nothing stored can drift. Nine transaction types cover buys,
+  sells, cash moves, dividends/interest/fees, and transfers between accounts
+  (`transfer_in` carries the original cost so basis survives a Bitso → Ledger move).
+- **Lot accounting**: first-in-first-out by default; a sell can name its exact buy lots
+  (`lot_links`) for specific-ID matching. Writes are validated by a strict lot replay —
+  overselling and edits that would orphan a later sell are rejected up front.
+- **Multi-currency**: every amount is stored in its native currency; reports convert at
+  the valuation date via tracked forex closes (USDMXN, EURUSD — no separate rates
+  pipeline). The UI has a USD⇄MXN toggle; a missing rate degrades to a warning.
+- **Performance**: daily portfolio value series feeds time-weighted return (flows land
+  end-of-day) and money-weighted return (XIRR); the chart shows the portfolio vs SPY
+  indexed to 100.
+- **Bank investments** (spec §7.4): fixed-term deposits (pagarés/CETES-style) and
+  interest-bearing demand balances, with ACT/360 or ACT/365 day counts, simple/monthly/
+  daily compounding, tiered rates (`15% up to 25k, 5% above`), caps, and auto-renew
+  (accrued interest capitalizes into the principal at rollover). A daily beat task flips
+  matured investments and sends reminders `MATURITY_REMINDER_DAYS` ahead through the
+  alert channels — deduped per investment per maturity date.
+- **CSV import**: paste or upload; delimiter sniffing, English/Spanish header
+  suggestions, a data-driven Bitso preset, per-row errors that never block good rows,
+  and content-hash dedup so re-imports count as `skipped_duplicates`.
+- **Fundamentals signal pack** for discovery mandates: *Financially healthy*
+  (Piotroski-style nine-check score over the last two annual statements — checks skip
+  rather than fail when a field is missing) and *Quality at a fair price*
+  (Magic-Formula-style rank of earnings yield × return on invested capital vs the
+  universe). Both stock-only; coverage grows as the weekly fundamentals rotation fills.
+
 ## Notes & deliberate decisions
 
 - **Stocks store the adjusted series** (Tiingo `adj*` columns) so indicators are
@@ -153,7 +183,8 @@ Nightly ingestion runs via Celery Beat at 03:00/03:10/03:20 America/Mexico_City
 - Beat schedule (America/Mexico_City): EOD 03:00/03:10/03:20 · metrics 06:30 ·
   news every 15 min · fundamentals Sun 06:30 (stalest-first, capped at 32 assets/run to
   respect the FMP day budget — the ~100-stock universe rotates over ~3 weeks) ·
-  discovery dispatcher every 5 min · alert digest 08:00. Schedule mandates after 06:30
+  discovery dispatcher every 5 min · alert digest 08:00 · maturity check 08:30.
+  Schedule mandates after 06:30
   so scans read fresh metrics.
 - **The ~100-stock nightly ingestion paces at Tiingo's bucket (~80s/symbol, ≈2.3h)** —
   ingest tasks carry 4h Celery time limits, and the metrics beat runs after the window.

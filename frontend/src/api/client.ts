@@ -558,6 +558,7 @@ export interface Position {
   asset_class: string | null
   quantity: number
   average_cost_native: number | null
+  cost_currency: string | null
   native_currency: string
   last_price: number | null
   market_value_native: number | null
