@@ -691,6 +691,63 @@ export interface AgentAction {
   created_at: string
 }
 
+export interface AgentToolCallRef {
+  id: string
+  name: string
+  arguments: Record<string, unknown>
+}
+
+export interface AgentMessage {
+  id: number
+  role: 'user' | 'assistant' | 'tool' | 'system'
+  content: string | null
+  tool_calls: AgentToolCallRef[] | null
+  tool_call_id: string | null
+  tool_name: string | null
+  tool_result: Record<string, unknown> | null
+  provider: string | null
+  model: string | null
+  input_tokens: number | null
+  output_tokens: number | null
+  created_at: string
+}
+
+export interface AgentConversation {
+  id: number
+  kind: 'chat' | 'task' | 'translate'
+  title: string | null
+  autonomous: boolean
+  status: string
+  provider: string | null
+  model: string | null
+  error: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface AgentConfirmation {
+  id: number
+  name: string
+  arguments: Record<string, unknown>
+  result_summary: string | null
+  status: string
+  created_at: string
+}
+
+export interface ConversationDetail {
+  conversation: AgentConversation
+  messages: AgentMessage[]
+  pending_confirmations: AgentConfirmation[]
+}
+
+export interface ConfirmationResolution {
+  ok: boolean
+  status: string
+  result_summary: string | null
+  error: string | null
+  result: unknown
+}
+
 export function getCurrency(): string {
   return localStorage.getItem('plutus_currency') ?? 'USD'
 }
@@ -885,6 +942,27 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+
+  agentConversations: (kind = 'chat') =>
+    request<AgentConversation[]>(`/agent/conversations?kind=${kind}`),
+  createAgentConversation: (title?: string) =>
+    request<AgentConversation>('/agent/conversations', {
+      method: 'POST',
+      body: JSON.stringify({ title: title ?? null }),
+    }),
+  agentConversation: (id: number) =>
+    request<ConversationDetail>(`/agent/conversations/${id}`),
+  patchAgentConversation: (id: number, body: { title?: string; autonomous?: boolean }) =>
+    request<AgentConversation>(`/agent/conversations/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  deleteAgentConversation: (id: number) =>
+    request<void>(`/agent/conversations/${id}`, { method: 'DELETE' }),
+  approveConfirmation: (id: number) =>
+    request<ConfirmationResolution>(`/agent/confirmations/${id}/approve`, { method: 'POST' }),
+  rejectConfirmation: (id: number) =>
+    request<ConfirmationResolution>(`/agent/confirmations/${id}/reject`, { method: 'POST' }),
 
   agentSettings: () => request<LLMSettings>('/agent/settings'),
   updateAgentSettings: (body: {

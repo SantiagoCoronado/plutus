@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 import './index.css'
 import App from './App.tsx'
+import AgentChat from './pages/AgentChat.tsx'
 import BacktestDetail from './pages/BacktestDetail.tsx'
 import Backtests from './pages/Backtests.tsx'
 import Dashboard from './pages/Dashboard.tsx'
@@ -28,6 +29,7 @@ const router = createBrowserRouter([
       { path: 'backtests', element: <Backtests /> },
       { path: 'backtests/:id', element: <BacktestDetail /> },
       { path: 'mandates', element: <Mandates /> },
+      { path: 'agent', element: <AgentChat /> },
       { path: 'settings', element: <Settings /> },
     ],
   },
