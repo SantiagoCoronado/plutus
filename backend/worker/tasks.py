@@ -99,3 +99,11 @@ def send_alert_digest() -> int:
     from app.discovery.notify import send_digest
 
     return send_digest()
+
+
+@celery_app.task(name="worker.tasks.check_maturities")
+def check_maturities() -> int:
+    """Flip matured bank investments and remind about upcoming maturities."""
+    from app.portfolio.maturities import run_maturity_check
+
+    return run_maturity_check()

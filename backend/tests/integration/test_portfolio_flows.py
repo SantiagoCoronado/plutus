@@ -684,3 +684,106 @@ class TestCsvImport:
             "/api/v1/portfolio/import/csv/preview", json={"content": "   \n"}, headers=AUTH
         )
         assert response.status_code == 422
+
+
+class TestMaturities:
+    @pytest.fixture
+    def email_env(self, monkeypatch):
+        from app.core.config import get_settings
+
+        monkeypatch.setenv("SMTP_HOST", "smtp.test")
+        monkeypatch.setenv("ALERT_EMAIL_TO", "me@test.com")
+        get_settings.cache_clear()
+        yield
+        get_settings.cache_clear()
+
+    @pytest.fixture
+    def outbox(self, monkeypatch):
+        import smtplib
+
+        from tests.unit.test_discovery_notify import FakeSMTP
+
+        FakeSMTP.instances = []
+        monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
+        return FakeSMTP
+
+    def make_investment(self, client, *, start_days_ago: int, term_days: int,
+                        auto_renew: bool = False, name: str = "Pagaré") -> dict:
+        account_name = f"Banco {name}"
+        account = make_account(client, name=account_name, type="bank", currency="MXN")
+        response = client.post(
+            "/api/v1/bank-investments",
+            json={
+                "account_id": account["id"],
+                "name": name,
+                "kind": "fixed_term",
+                "principal": 100000,
+                "currency": "MXN",
+                "annual_rate": 0.12,
+                "start_date": (
+                    datetime.now(UTC) - timedelta(days=start_days_ago)
+                ).date().isoformat(),
+                "term_days": term_days,
+                "auto_renew": auto_renew,
+            },
+            headers=AUTH,
+        )
+        assert response.status_code == 201, response.text
+        return response.json()
+
+    def test_reminder_sent_once(self, client, email_env, outbox):
+        from app.portfolio.maturities import run_maturity_check
+
+        # matures in 3 days (inside the 7-day reminder window)
+        investment = self.make_investment(client, start_days_ago=87, term_days=90)
+        assert run_maturity_check() == 1
+        assert len(outbox.instances) == 1
+        message = outbox.instances[0].sent[0]
+        assert "matures in 3 day(s)" in message["Subject"]
+        assert "Pagaré" in message.get_content()
+
+        # second run: deduped by (investment, maturity_date)
+        assert run_maturity_check() == 0
+        assert len(outbox.instances) == 1
+
+        # audit row exists
+        from sqlalchemy import select
+
+        from app.models import Notification
+
+        with session_scope() as session:
+            row = session.scalars(select(Notification)).one()
+            assert row.kind == "maturity"
+            assert row.meta["investment_id"] == investment["id"]
+
+    def test_matured_without_auto_renew_flips_status(self, client, email_env, outbox):
+        from app.portfolio.maturities import run_maturity_check
+
+        investment = self.make_investment(client, start_days_ago=100, term_days=90)
+        run_maturity_check()
+        got = client.get(f"/api/v1/bank-investments/{investment['id']}", headers=AUTH).json()
+        assert got["status"] == "matured"
+        # a matured investment's value stays frozen at maturity value
+        assert got["current_value"] == pytest.approx(100000 * (1 + 0.12 * 90 / 360), abs=0.01)
+
+    def test_auto_renew_capitalizes_and_rolls(self, client, email_env, outbox):
+        from app.portfolio.maturities import run_maturity_check
+
+        investment = self.make_investment(
+            client, start_days_ago=100, term_days=90, auto_renew=True, name="Renovable"
+        )
+        run_maturity_check()
+        got = client.get(f"/api/v1/bank-investments/{investment['id']}", headers=AUTH).json()
+        assert got["status"] == "active"
+        # principal capitalized: 100000 * (1 + 0.12*90/360) = 103000
+        assert got["principal"] == pytest.approx(103000.0, abs=0.01)
+        assert got["start_date"] == investment["maturity_date"]
+        assert "auto-renewed" in got["note"]
+        # renewed maturity is 80 days out -> outside the window, no reminder
+        assert len(outbox.instances) == 0
+
+    def test_unconfigured_channels_send_nothing(self, client):
+        from app.portfolio.maturities import run_maturity_check
+
+        self.make_investment(client, start_days_ago=87, term_days=90)
+        assert run_maturity_check() == 0  # no channel configured, no crash

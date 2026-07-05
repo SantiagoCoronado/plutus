@@ -66,4 +66,9 @@ celery_app.conf.beat_schedule = {
         "task": "worker.tasks.send_alert_digest",
         "schedule": crontab(hour=8, minute=0),
     },
+    # bank-investment maintenance: roll auto-renewals, remind before maturities
+    "maturity-check": {
+        "task": "worker.tasks.check_maturities",
+        "schedule": crontab(hour=8, minute=30),
+    },
 }
