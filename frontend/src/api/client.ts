@@ -749,6 +749,23 @@ export interface ConfirmationResolution {
   result: unknown
 }
 
+export interface StrategyTranslation {
+  id: number
+  status: 'draft' | 'confirmed' | 'discarded' | 'failed'
+  translatable: boolean | null
+  symbol: string | null
+  asset_id: number | null
+  understanding_md: string | null
+  limitations: string[] | null
+  spec: Record<string, unknown> | null
+  backtest_id: number | null
+  provider: string | null
+  model: string | null
+  error: string | null
+  created_at: string
+  updated_at: string
+}
+
 export function getCurrency(): string {
   return localStorage.getItem('plutus_currency') ?? 'USD'
 }
@@ -943,6 +960,21 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+
+  translateStrategy: (content: string, symbol?: string) =>
+    request<StrategyTranslation>('/translations', {
+      method: 'POST',
+      body: JSON.stringify({ content, symbol: symbol || null }),
+    }),
+  translations: (limit = 20) =>
+    request<StrategyTranslation[]>(`/translations?limit=${limit}`),
+  confirmTranslation: (id: number) =>
+    request<{ translation_id: number; backtest_id: number }>(
+      `/translations/${id}/confirm`,
+      { method: 'POST' },
+    ),
+  discardTranslation: (id: number) =>
+    request<StrategyTranslation>(`/translations/${id}/discard`, { method: 'POST' }),
 
   agentConversations: (kind = 'chat') =>
     request<AgentConversation[]>(`/agent/conversations?kind=${kind}`),

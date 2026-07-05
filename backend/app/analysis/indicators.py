@@ -39,6 +39,10 @@ class IndicatorSpec:
     compute: Callable[[pd.DataFrame], pd.DataFrame]
     requires_volume: bool = False
     columns: tuple[str, ...] = field(default=())
+    # snapshot=False keeps a spec out of compute_snapshot (and therefore out of
+    # the asset_metrics upsert, which splats every snapshot key into columns).
+    # Candlestick patterns are per-bar strategy vocabulary, not screener metrics.
+    snapshot: bool = True
 
     def output_columns(self) -> tuple[str, ...]:
         return self.columns or (self.key,)
@@ -140,6 +144,65 @@ def _volatility(n: int):
     return compute
 
 
+# --- candlestick patterns (spec §13.5: legal strategy-vocabulary extensions) -------
+# Pure OHLC math emitting 1.0/0.0 series, so `pattern == 1` and the cross
+# operators both work in strategy conditions. Definitions:
+#   body = |close - open|, range = high - low,
+#   lower wick = min(open, close) - low, upper wick = high - max(open, close)
+
+
+def _candle_parts(df: pd.DataFrame):
+    open_, close = df["open"].astype(float), df["close"].astype(float)
+    high, low = df["high"].astype(float), df["low"].astype(float)
+    body = (close - open_).abs()
+    rng = high - low
+    lower = pd.concat([open_, close], axis=1).min(axis=1) - low
+    upper = high - pd.concat([open_, close], axis=1).max(axis=1)
+    return open_, close, body, rng, lower, upper
+
+
+def _engulfing(bullish: bool):
+    def compute(df: pd.DataFrame) -> pd.DataFrame:
+        open_, close, *_ = _candle_parts(df)
+        prev_open, prev_close = open_.shift(1), close.shift(1)
+        if bullish:  # red candle swallowed by a bigger green one
+            mask = (
+                (prev_close < prev_open)
+                & (close > open_)
+                & (open_ < prev_close)
+                & (close > prev_open)
+            )
+        else:
+            mask = (
+                (prev_close > prev_open)
+                & (close < open_)
+                & (open_ > prev_close)
+                & (close < prev_open)
+            )
+        name = "bullish_engulfing" if bullish else "bearish_engulfing"
+        return pd.DataFrame({name: mask.fillna(False).astype(float)})
+
+    return compute
+
+
+def _wick_reversal(name: str, *, long_lower: bool):
+    """hammer (long lower wick) / shooting_star (long upper wick)."""
+
+    def compute(df: pd.DataFrame) -> pd.DataFrame:
+        _, _, body, rng, lower, upper = _candle_parts(df)
+        big, small = (lower, upper) if long_lower else (upper, lower)
+        mask = (rng > 0) & (body >= 0.1 * rng) & (big >= 2 * body) & (small <= body)
+        return pd.DataFrame({name: mask.fillna(False).astype(float)})
+
+    return compute
+
+
+def _doji(df: pd.DataFrame) -> pd.DataFrame:
+    _, _, body, rng, _, _ = _candle_parts(df)
+    mask = (rng > 0) & (body <= 0.1 * rng)
+    return pd.DataFrame({"doji": mask.fillna(False).astype(float)})
+
+
 INDICATORS: dict[str, IndicatorSpec] = {
     spec.key: spec
     for spec in [
@@ -171,6 +234,16 @@ INDICATORS: dict[str, IndicatorSpec] = {
         IndicatorSpec("vwap_20", 20, _vwap_20, requires_volume=True),
         IndicatorSpec("volatility_20", 21, _volatility(20), columns=("volatility_20",)),
         IndicatorSpec("volatility_60", 61, _volatility(60), columns=("volatility_60",)),
+        IndicatorSpec("bullish_engulfing", 2, _engulfing(bullish=True), snapshot=False),
+        IndicatorSpec("bearish_engulfing", 2, _engulfing(bullish=False), snapshot=False),
+        IndicatorSpec(
+            "hammer", 1, _wick_reversal("hammer", long_lower=True), snapshot=False
+        ),
+        IndicatorSpec(
+            "shooting_star", 1,
+            _wick_reversal("shooting_star", long_lower=False), snapshot=False,
+        ),
+        IndicatorSpec("doji", 1, _doji, snapshot=False),
     ]
 }
 
@@ -232,6 +305,8 @@ def compute_snapshot(
 
     # indicator registry: latest value of every output column
     for spec in INDICATORS.values():
+        if not spec.snapshot:
+            continue  # never leaks into the asset_metrics upsert
         for col in spec.output_columns():
             out.setdefault(col, None)
         if spec.requires_volume and not _has_volume(df):

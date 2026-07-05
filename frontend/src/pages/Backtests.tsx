@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, fmtPct, pctClass, relTime, type BacktestSummary } from '../api/client'
+import TranslateStrategyCard from '../components/backtests/TranslateStrategyCard'
 
 const STATUS_STYLES: Record<string, string> = {
   queued: 'bg-zinc-800 text-zinc-400',
@@ -39,6 +40,8 @@ export default function Backtests() {
           <option value="strategy">strategy</option>
         </select>
       </div>
+
+      <TranslateStrategyCard onRan={() => load(kind)} />
 
       {backtests.length === 0 ? (
         <p className="rounded-lg border border-dashed border-zinc-800 p-10 text-center text-sm text-zinc-500">

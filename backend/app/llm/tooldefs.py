@@ -735,6 +735,48 @@ def _add_transaction(session: Session, args: dict) -> Any:
     }
 
 
+def _translate_strategy(session: Session, args: dict) -> Any:
+    """Read tier on purpose: pure translation — the confirm endpoint is the only
+    path to execution. Runs the async pipeline on its own thread/loop because
+    handlers are sync and may already sit inside a running event loop."""
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.llm.budget import BudgetExceeded
+    from app.llm.translator import translate_strategy_content
+
+    content = str(args["content"]).strip()
+    if len(content) < 20:
+        raise ToolInputError("content is too short to be a strategy description")
+    symbol_hint = str(args.get("symbol") or "").strip() or None
+
+    def _run():
+        return asyncio.run(translate_strategy_content(session, content, symbol_hint))
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            translation = pool.submit(_run).result(timeout=300)
+    except BudgetExceeded as exc:
+        raise ToolInputError(str(exc)) from exc
+
+    if translation.status == "failed":
+        raise ToolInputError(f"translation failed: {translation.error}")
+    return {
+        "translation_id": translation.id,
+        "translatable": translation.translatable,
+        "symbol": translation.symbol,
+        "understanding": translation.understanding_md,
+        "limitations": translation.limitations,
+        "spec": translation.spec,
+        "note": (
+            "This is a DRAFT with a fidelity report. Present the understanding and "
+            "every limitation to the user verbatim; the backtest only runs after "
+            "they confirm it on the Backtests page (or POST "
+            f"/translations/{translation.id}/confirm)."
+        ),
+    }
+
+
 # --- schemas + registry -----------------------------------------------------------
 
 
@@ -961,6 +1003,30 @@ def _build_tools() -> dict[str, ToolDef]:
             schema=_obj({}, []),
             handler=_get_ingestion_status,
             summarize=lambda args, result: f"{len(result['recent_runs'])} recent runs",
+        ),
+        ToolDef(
+            name="translate_strategy",
+            description=(
+                "Translate a pasted strategy description (article, transcript, or "
+                "the user's own words) into a backtestable spec plus a MANDATORY "
+                "fidelity report listing everything the daily-bar engine cannot "
+                "express. Pure translation — nothing runs until the user confirms."
+            ),
+            tier="read",
+            schema=_obj(
+                {
+                    "content": {"type": "string",
+                                "description": "the strategy text to translate"},
+                    "symbol": {"type": "string",
+                               "description": "default ticker if the source names none"},
+                },
+                ["content"],
+            ),
+            handler=_translate_strategy,
+            summarize=lambda args, result: (
+                f"translated strategy draft #{result['translation_id']} "
+                f"({result['symbol']}, {len(result.get('limitations') or [])} limitations)"
+            ),
         ),
         # -- write tier --
         ToolDef(
