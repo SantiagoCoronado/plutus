@@ -8,6 +8,7 @@ import Backtests from './pages/Backtests.tsx'
 import Dashboard from './pages/Dashboard.tsx'
 import Inbox from './pages/Inbox.tsx'
 import Mandates from './pages/Mandates.tsx'
+import Portfolio from './pages/Portfolio.tsx'
 import Research from './pages/Research.tsx'
 import Screener from './pages/Screener.tsx'
 import Watchlists from './pages/Watchlists.tsx'
@@ -18,6 +19,7 @@ const router = createBrowserRouter([
     element: <App />,
     children: [
       { index: true, element: <Dashboard /> },
+      { path: 'portfolio', element: <Portfolio /> },
       { path: 'inbox', element: <Inbox /> },
       { path: 'asset/:id', element: <Research /> },
       { path: 'watchlists', element: <Watchlists /> },

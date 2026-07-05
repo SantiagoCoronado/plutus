@@ -84,6 +84,9 @@ export default function App() {
             <NavLink to="/" end className={navClass}>
               Dashboard
             </NavLink>
+            <NavLink to="/portfolio" className={navClass}>
+              Portfolio
+            </NavLink>
             <NavLink to="/inbox" className={navClass}>
               Inbox
             </NavLink>

@@ -430,6 +430,229 @@ export interface CandidateSummary {
   by_mandate: MandateCandidateSummary[]
 }
 
+// --- portfolio (Phase 5) -------------------------------------------------------
+
+export type AccountType = 'brokerage' | 'exchange' | 'wallet' | 'bank' | 'manual'
+export type TransactionType =
+  | 'buy'
+  | 'sell'
+  | 'deposit'
+  | 'withdrawal'
+  | 'dividend'
+  | 'interest'
+  | 'fee'
+  | 'transfer_in'
+  | 'transfer_out'
+
+export interface Account {
+  id: number
+  name: string
+  type: AccountType
+  provider: string | null
+  currency: string
+  note: string | null
+  is_active: boolean
+  created_at: string
+  cash_balances: { currency: string; amount: number }[]
+  transactions_count: number
+  bank_investments_count: number
+}
+
+export interface AccountBody {
+  name: string
+  type: AccountType
+  provider?: string | null
+  currency?: string
+  note?: string | null
+  is_active?: boolean
+}
+
+export interface Transaction {
+  id: number
+  account_id: number
+  asset_id: number | null
+  type: TransactionType
+  ts: string
+  quantity: number
+  price: number | null
+  fees: number
+  currency: string
+  note: string | null
+  external_id: string | null
+  lot_links: { buy_transaction_id: number; quantity: number }[] | null
+  created_at: string
+  account_name: string | null
+  symbol: string | null
+}
+
+export interface TransactionBody {
+  account_id: number
+  asset_id?: number | null
+  type: TransactionType
+  ts: string
+  quantity: number
+  price?: number | null
+  fees?: number
+  currency: string
+  note?: string | null
+  lot_links?: { buy_transaction_id: number; quantity: number }[] | null
+}
+
+export interface RateTier {
+  up_to: number | null
+  annual_rate: number
+}
+
+export interface BankInvestment {
+  id: number
+  account_id: number
+  name: string
+  kind: 'demand' | 'fixed_term'
+  principal: number
+  currency: string
+  annual_rate: number
+  rate_tiers: RateTier[] | null
+  day_count: 'act360' | 'act365'
+  compounding: 'daily' | 'monthly' | 'at_maturity'
+  start_date: string
+  term_days: number | null
+  maturity_date: string | null
+  cap_amount: number | null
+  auto_renew: boolean
+  status: 'active' | 'matured' | 'closed'
+  note: string | null
+  created_at: string
+  updated_at: string
+  accrued_interest: number
+  current_value: number
+  projected_maturity_value: number | null
+  days_to_maturity: number | null
+  effective_annual_rate: number
+  account_name: string | null
+}
+
+export interface BankInvestmentBody {
+  account_id: number
+  name: string
+  kind: 'demand' | 'fixed_term'
+  principal: number
+  currency?: string
+  annual_rate: number
+  rate_tiers?: RateTier[] | null
+  day_count?: 'act360' | 'act365'
+  compounding?: 'daily' | 'monthly' | 'at_maturity'
+  start_date: string
+  term_days?: number | null
+  cap_amount?: number | null
+  auto_renew?: boolean
+  status?: 'active' | 'matured' | 'closed'
+  note?: string | null
+}
+
+export interface Position {
+  account_id: number
+  account_name: string | null
+  asset_id: number
+  symbol: string
+  name: string | null
+  asset_class: string | null
+  quantity: number
+  average_cost_native: number | null
+  native_currency: string
+  last_price: number | null
+  market_value_native: number | null
+  value: number | null
+  cost_basis: number | null
+  unrealized_pnl: number | null
+  unrealized_pnl_pct: number | null
+  realized_pnl: number | null
+  weight: number | null
+}
+
+export interface PositionsReport {
+  as_of: string
+  currency: string
+  totals: {
+    value: number | null
+    positions_value: number | null
+    cash_value: number | null
+    bank_value: number | null
+    cost_basis: number | null
+    unrealized_pnl: number | null
+    unrealized_pnl_pct: number | null
+    realized_pnl: number | null
+  }
+  positions: Position[]
+  cash: {
+    account_id: number
+    account_name: string | null
+    currency: string
+    amount: number | null
+    value: number | null
+  }[]
+  bank_investments: {
+    id: number
+    account_id: number
+    account_name: string | null
+    name: string
+    kind: string
+    currency: string
+    principal: number
+    accrued_interest: number | null
+    value_native: number | null
+    value: number | null
+    maturity_date: string | null
+    status: string
+  }[]
+  warnings: Record<string, unknown>[]
+}
+
+export type PerformancePeriod = '1m' | '3m' | '6m' | 'ytd' | '1y' | 'all'
+
+export interface PerformanceReport {
+  currency: string
+  period: string
+  start: string
+  end: string
+  twr: number | null
+  twr_annualized: number | null
+  irr: number | null
+  series: [string, number][]
+  indexed: [string, number][]
+  benchmark: { symbol: string; indexed: [string, number][] } | null
+  flows: [string, number][]
+}
+
+export interface AllocationReport {
+  as_of: string
+  currency: string
+  by: string
+  total: number | null
+  groups: { key: string; value: number | null; weight: number | null }[]
+}
+
+export interface CsvPreview {
+  columns: string[]
+  sample_rows: Record<string, string>[]
+  row_count: number
+  preset: string | null
+  suggested_mapping: Record<string, string>
+}
+
+export interface CsvCommitResult {
+  created: number
+  skipped_duplicates: number
+  errors: { row?: number; error: string }[]
+}
+
+export function getCurrency(): string {
+  return localStorage.getItem('plutus_currency') ?? 'USD'
+}
+
+export function setCurrency(currency: string): void {
+  localStorage.setItem('plutus_currency', currency)
+}
+
 // --- api ----------------------------------------------------------------------
 
 export const api = {
@@ -560,6 +783,62 @@ export const api = {
     if (!resp.ok) throw new ApiError(resp.status, await resp.text())
     return resp.blob()
   },
+
+  // --- portfolio (Phase 5) ---
+  accounts: () => request<Account[]>('/accounts'),
+  createAccount: (body: AccountBody) =>
+    request<Account>('/accounts', { method: 'POST', body: JSON.stringify(body) }),
+  updateAccount: (id: number, body: AccountBody) =>
+    request<Account>(`/accounts/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteAccount: (id: number) => request<void>(`/accounts/${id}`, { method: 'DELETE' }),
+
+  transactions: (params: {
+    account_id?: number
+    asset_id?: number
+    type?: string
+    limit?: number
+    offset?: number
+  }) => {
+    const qs = new URLSearchParams()
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined) qs.set(key, String(value))
+    }
+    return request<{ items: Transaction[]; total: number }>(`/transactions?${qs}`)
+  },
+  createTransaction: (body: TransactionBody) =>
+    request<Transaction>('/transactions', { method: 'POST', body: JSON.stringify(body) }),
+  updateTransaction: (id: number, body: TransactionBody) =>
+    request<Transaction>(`/transactions/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteTransaction: (id: number) => request<void>(`/transactions/${id}`, { method: 'DELETE' }),
+
+  bankInvestments: () => request<BankInvestment[]>('/bank-investments'),
+  createBankInvestment: (body: BankInvestmentBody) =>
+    request<BankInvestment>('/bank-investments', { method: 'POST', body: JSON.stringify(body) }),
+  updateBankInvestment: (id: number, body: BankInvestmentBody) =>
+    request<BankInvestment>(`/bank-investments/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  deleteBankInvestment: (id: number) =>
+    request<void>(`/bank-investments/${id}`, { method: 'DELETE' }),
+
+  portfolioPositions: (currency: string) =>
+    request<PositionsReport>(`/portfolio/positions?currency=${currency}`),
+  portfolioPerformance: (period: PerformancePeriod, currency: string) =>
+    request<PerformanceReport>(`/portfolio/performance?period=${period}&currency=${currency}`),
+  portfolioAllocation: (by: string, currency: string) =>
+    request<AllocationReport>(`/portfolio/allocation?by=${by}&currency=${currency}`),
+
+  csvPreview: (content: string) =>
+    request<CsvPreview>('/portfolio/import/csv/preview', {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    }),
+  csvCommit: (body: { account_id: number; content: string; mapping: Record<string, string> }) =>
+    request<CsvCommitResult>('/portfolio/import/csv/commit', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
 }
 
 // --- shared formatting helpers -------------------------------------------------
