@@ -156,3 +156,100 @@ class BankInvestmentOut(BaseModel):
     days_to_maturity: int | None = None
     effective_annual_rate: float = 0.0
     account_name: str | None = None
+
+
+class PositionOut(BaseModel):
+    account_id: int
+    account_name: str | None
+    asset_id: int
+    symbol: str
+    name: str | None
+    asset_class: str | None
+    quantity: float
+    average_cost_native: float | None
+    native_currency: str
+    last_price: float | None
+    market_value_native: float | None
+    value: float | None
+    cost_basis: float | None
+    unrealized_pnl: float | None
+    unrealized_pnl_pct: float | None
+    realized_pnl: float | None
+    weight: float | None = None
+
+
+class CashPositionOut(BaseModel):
+    account_id: int
+    account_name: str | None
+    currency: str
+    amount: float | None
+    value: float | None
+
+
+class BankPositionOut(BaseModel):
+    id: int
+    account_id: int
+    account_name: str | None
+    name: str
+    kind: str
+    currency: str
+    principal: float
+    accrued_interest: float | None
+    value_native: float | None
+    value: float | None
+    maturity_date: date | None
+    status: str
+
+
+class PortfolioTotalsOut(BaseModel):
+    value: float | None
+    positions_value: float | None
+    cash_value: float | None
+    bank_value: float | None
+    cost_basis: float | None
+    unrealized_pnl: float | None
+    unrealized_pnl_pct: float | None
+    realized_pnl: float | None
+
+
+class PositionsReportOut(BaseModel):
+    as_of: date
+    currency: str
+    totals: PortfolioTotalsOut
+    positions: list[PositionOut]
+    cash: list[CashPositionOut]
+    bank_investments: list[BankPositionOut]
+    warnings: list[dict[str, Any]]
+
+
+class BenchmarkSeriesOut(BaseModel):
+    symbol: str
+    indexed: list[list[Any]]
+
+
+class PerformanceOut(BaseModel):
+    currency: str
+    period: str
+    start: date
+    end: date
+    twr: float | None
+    twr_annualized: float | None
+    irr: float | None
+    series: list[list[Any]]
+    indexed: list[list[Any]]
+    benchmark: BenchmarkSeriesOut | None
+    flows: list[list[Any]]
+
+
+class AllocationGroupOut(BaseModel):
+    key: str
+    value: float | None
+    weight: float | None
+
+
+class AllocationOut(BaseModel):
+    as_of: date
+    currency: str
+    by: str
+    total: float | None
+    groups: list[AllocationGroupOut]

@@ -1,11 +1,13 @@
-"""Phase 5 integration: accounts / transactions / bank investments CRUD."""
+"""Phase 5 integration: accounts / transactions / bank investments CRUD,
+positions / performance / allocation reports against seeded bars + fx."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.core.db import session_scope
+from app.ingestion.eod import upsert_candles
 from app.ingestion.seed import seed_assets
 from tests.integration.conftest import TEST_TOKEN
 
@@ -442,3 +444,166 @@ class TestBankInvestments:
                 path,
                 response.text,
             )
+
+
+def seed_flat_bars(asset_ids: dict, days: int = 400) -> None:
+    """AAPL drifts 200→240, USDMXN pinned at 20, SPY drifts 500→550."""
+    end = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    with session_scope() as session:
+        for symbol, start_price, end_price, volume in (
+            ("AAPL", 200.0, 240.0, 1e6),
+            ("SPY", 500.0, 550.0, 1e6),
+            ("USDMXN", 20.0, 20.0, None),
+        ):
+            step = (end_price - start_price) / max(days - 1, 1)
+            rows = [
+                {
+                    "asset_id": asset_ids[symbol],
+                    "interval": "1d",
+                    "ts": end - timedelta(days=days - i),
+                    "open": start_price + step * i,
+                    "high": start_price + step * i + 1,
+                    "low": start_price + step * i - 1,
+                    "close": round(start_price + step * i, 4),
+                    "volume": volume,
+                }
+                for i in range(days)
+            ]
+            upsert_candles(session, rows)
+
+
+def iso_days_ago(days: int) -> str:
+    return (datetime.now(UTC) - timedelta(days=days)).strftime("%Y-%m-%dT12:00:00Z")
+
+
+@pytest.fixture
+def funded_portfolio(client, asset_ids):
+    """Bitso: 5000 USD deposited, 10 AAPL bought; BBVA: a 50k MXN pagaré."""
+    seed_flat_bars(asset_ids)
+    bitso = make_account(client, name="Bitso", type="exchange")
+    bbva = make_account(client, name="BBVA", type="bank", currency="MXN")
+    post_txn(client, account_id=bitso["id"], type="deposit", quantity=5000,
+             ts=iso_days_ago(360))
+    post_txn(client, account_id=bitso["id"], type="buy", asset_id=asset_ids["AAPL"],
+             quantity=10, price=190, fees=10, ts=iso_days_ago(300))
+    response = client.post(
+        "/api/v1/bank-investments",
+        json={
+            "account_id": bbva["id"],
+            "name": "Pagaré 180d",
+            "kind": "fixed_term",
+            "principal": 50000,
+            "currency": "MXN",
+            "annual_rate": 0.10,
+            "start_date": (datetime.now(UTC) - timedelta(days=90)).date().isoformat(),
+            "term_days": 180,
+        },
+        headers=AUTH,
+    )
+    assert response.status_code == 201, response.text
+    return {"bitso": bitso, "bbva": bbva}
+
+
+class TestPortfolioReports:
+    def test_positions_in_usd(self, client, funded_portfolio):
+        report = client.get(
+            "/api/v1/portfolio/positions", params={"currency": "USD"}, headers=AUTH
+        ).json()
+        assert report["currency"] == "USD"
+        [position] = report["positions"]
+        assert position["symbol"] == "AAPL"
+        assert position["quantity"] == pytest.approx(10)
+        assert position["cost_basis"] == pytest.approx(1910.0)  # 10*190 + 10 fee
+        assert position["last_price"] == pytest.approx(240.0, abs=1.0)
+        assert position["unrealized_pnl"] == pytest.approx(
+            position["value"] - 1910.0, abs=0.01
+        )
+        [cash] = report["cash"]
+        assert cash["amount"] == pytest.approx(5000 - 1910)
+        [bank] = report["bank_investments"]
+        # 90 days of 10% on 50k MXN, ACT/360 = 1250 MXN accrued; at 20 MXN/USD
+        assert bank["accrued_interest"] == pytest.approx(1250.0, abs=30.0)
+        assert bank["value"] == pytest.approx(51250.0 / 20.0, abs=5.0)
+        totals = report["totals"]
+        assert totals["value"] == pytest.approx(
+            position["value"] + cash["value"] + bank["value"], abs=0.05
+        )
+
+    def test_positions_in_mxn_converts_the_usd_side(self, client, funded_portfolio):
+        usd = client.get(
+            "/api/v1/portfolio/positions", params={"currency": "USD"}, headers=AUTH
+        ).json()
+        mxn = client.get(
+            "/api/v1/portfolio/positions", params={"currency": "MXN"}, headers=AUTH
+        ).json()
+        # USDMXN pinned at 20 in the fixture
+        assert mxn["totals"]["value"] == pytest.approx(usd["totals"]["value"] * 20.0, rel=1e-3)
+        assert mxn["positions"][0]["market_value_native"] == pytest.approx(
+            usd["positions"][0]["market_value_native"]
+        )
+        assert not [w for w in mxn["warnings"] if "rate" in w.get("warning", "")]
+
+    def test_performance_report(self, client, funded_portfolio):
+        report = client.get(
+            "/api/v1/portfolio/performance",
+            params={"period": "1y", "currency": "USD"},
+            headers=AUTH,
+        ).json()
+        assert report["twr"] is not None
+        assert report["irr"] is not None
+        # AAPL rose and the pagaré accrues: both returns are positive
+        assert report["twr"] > 0
+        assert report["irr"] > 0
+        assert report["benchmark"]["symbol"] == "SPY"
+        assert report["indexed"][0][1] == pytest.approx(100.0)
+        assert len(report["series"]) > 300
+        # the two external flows: the deposit (bank principal is not a flow)
+        assert len(report["flows"]) == 1
+
+    def test_allocation_groups(self, client, funded_portfolio):
+        by_class = client.get(
+            "/api/v1/portfolio/allocation",
+            params={"currency": "USD", "by": "asset_class"},
+            headers=AUTH,
+        ).json()
+        keys = {group["key"] for group in by_class["groups"]}
+        assert keys == {"stock", "cash & fixed income"}
+        assert sum(g["weight"] for g in by_class["groups"]) == pytest.approx(1.0, abs=1e-4)
+
+        by_currency = client.get(
+            "/api/v1/portfolio/allocation",
+            params={"currency": "MXN", "by": "currency"},
+            headers=AUTH,
+        ).json()
+        assert {group["key"] for group in by_currency["groups"]} == {"USD", "MXN"}
+
+        by_account = client.get(
+            "/api/v1/portfolio/allocation", params={"by": "account"}, headers=AUTH
+        ).json()
+        assert {group["key"] for group in by_account["groups"]} == {"Bitso", "BBVA"}
+
+    def test_unsupported_currency_422(self, client, funded_portfolio):
+        response = client.get(
+            "/api/v1/portfolio/positions", params={"currency": "GBP"}, headers=AUTH
+        )
+        assert response.status_code == 422
+
+    def test_account_scope(self, client, funded_portfolio):
+        report = client.get(
+            "/api/v1/portfolio/positions",
+            params={"currency": "USD", "account_id": funded_portfolio["bbva"]["id"]},
+            headers=AUTH,
+        ).json()
+        assert report["positions"] == []
+        assert len(report["bank_investments"]) == 1
+
+    def test_missing_fx_degrades_with_warning(self, client, asset_ids):
+        # EUR cash with no EURUSD bars seeded: unconverted, but the report renders
+        account = make_account(client, name="EU", type="bank", currency="EUR")
+        post_txn(client, account_id=account["id"], type="deposit", quantity=1000,
+                 currency="EUR")
+        report = client.get(
+            "/api/v1/portfolio/positions", params={"currency": "USD"}, headers=AUTH
+        ).json()
+        assert report["cash"][0]["value"] == pytest.approx(1000.0)  # fallback 1:1
+        assert any("EUR->USD" in w.get("warning", "") for w in report["warnings"])

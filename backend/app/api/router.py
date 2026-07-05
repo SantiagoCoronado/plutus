@@ -9,6 +9,7 @@ from app.api.routes import (
     candidates,
     ingestion,
     mandates,
+    portfolio,
     research,
     screens,
     transactions,
@@ -26,6 +27,7 @@ api_router.include_router(candidates.router)
 api_router.include_router(accounts.router)
 api_router.include_router(transactions.router)
 api_router.include_router(bank_investments.router)
+api_router.include_router(portfolio.router)
 api_router.include_router(ingestion.router)
 
 
