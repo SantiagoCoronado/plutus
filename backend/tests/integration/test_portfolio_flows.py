@@ -607,3 +607,80 @@ class TestPortfolioReports:
         ).json()
         assert report["cash"][0]["value"] == pytest.approx(1000.0)  # fallback 1:1
         assert any("EUR->USD" in w.get("warning", "") for w in report["warnings"])
+
+
+BITSO_CSV = (
+    "tid,date,type,major,minor,amount,rate,value,fee\n"
+    "1001,2026-03-02 10:15,buy,btc,mxn,0.05,1800000,90000,225\n"
+    "1002,2026-03-05 16:40,funding,,mxn,100000,,,0\n"
+    "1003,2026-03-06 11:00,buy,doge,mxn,100,10,1000,1\n"  # unknown symbol -> row error
+)
+
+
+class TestCsvImport:
+    def test_preview_then_commit_then_idempotent_recommit(self, client, asset_ids):
+        account = make_account(client)
+
+        preview = client.post(
+            "/api/v1/portfolio/import/csv/preview", json={"content": BITSO_CSV}, headers=AUTH
+        ).json()
+        assert preview["preset"] == "bitso"
+        assert preview["row_count"] == 3
+
+        body = {
+            "account_id": account["id"],
+            "content": BITSO_CSV,
+            "mapping": preview["suggested_mapping"],
+        }
+        first = client.post("/api/v1/portfolio/import/csv/commit", json=body, headers=AUTH).json()
+        assert first["created"] == 2
+        assert first["skipped_duplicates"] == 0
+        assert len(first["errors"]) == 1
+        assert "doge" in first["errors"][0]["error"]
+
+        again = client.post("/api/v1/portfolio/import/csv/commit", json=body, headers=AUTH).json()
+        assert again["created"] == 0
+        assert again["skipped_duplicates"] == 2
+
+        listed = client.get(
+            "/api/v1/transactions", params={"account_id": account["id"]}, headers=AUTH
+        ).json()
+        assert listed["total"] == 2
+        by_type = {item["type"]: item for item in listed["items"]}
+        assert by_type["buy"]["symbol"] == "BTC"
+        assert by_type["buy"]["currency"] == "MXN"
+        assert by_type["deposit"]["external_id"] == "1002"
+
+    def test_commit_validation(self, client, asset_ids):
+        account = make_account(client)
+        response = client.post(
+            "/api/v1/portfolio/import/csv/commit",
+            json={
+                "account_id": 999,
+                "content": BITSO_CSV,
+                "mapping": {"ts": "date", "bogus": "x"},
+            },
+            headers=AUTH,
+        )
+        assert response.status_code == 422
+        paths = {e["path"] for e in response.json()["detail"]["errors"]}
+        assert paths == {"account_id", "mapping"}
+
+        response = client.post(
+            "/api/v1/portfolio/import/csv/commit",
+            json={
+                "account_id": account["id"],
+                "content": BITSO_CSV,
+                "mapping": {"ts": "date", "type": "type", "quantity": "amount"},
+                "tz": "Mars/Olympus",
+            },
+            headers=AUTH,
+        )
+        assert response.status_code == 422
+        assert response.json()["detail"]["errors"][0]["path"] == "tz"
+
+    def test_preview_rejects_headerless_content(self, client):
+        response = client.post(
+            "/api/v1/portfolio/import/csv/preview", json={"content": "   \n"}, headers=AUTH
+        )
+        assert response.status_code == 422

@@ -253,3 +253,28 @@ class AllocationOut(BaseModel):
     by: str
     total: float | None
     groups: list[AllocationGroupOut]
+
+
+class CsvPreviewIn(BaseModel):
+    content: str = Field(min_length=1)
+
+
+class CsvPreviewOut(BaseModel):
+    columns: list[str]
+    sample_rows: list[dict[str, Any]]
+    row_count: int
+    preset: str | None
+    suggested_mapping: dict[str, str]
+
+
+class CsvCommitIn(BaseModel):
+    account_id: int
+    content: str = Field(min_length=1)
+    mapping: dict[str, str]
+    tz: str | None = None
+
+
+class CsvCommitOut(BaseModel):
+    created: int
+    skipped_duplicates: int
+    errors: list[dict[str, Any]]
