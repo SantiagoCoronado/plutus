@@ -11,6 +11,7 @@ import Mandates from './pages/Mandates.tsx'
 import Portfolio from './pages/Portfolio.tsx'
 import Research from './pages/Research.tsx'
 import Screener from './pages/Screener.tsx'
+import Settings from './pages/Settings.tsx'
 import Watchlists from './pages/Watchlists.tsx'
 
 const router = createBrowserRouter([
@@ -27,6 +28,7 @@ const router = createBrowserRouter([
       { path: 'backtests', element: <Backtests /> },
       { path: 'backtests/:id', element: <BacktestDetail /> },
       { path: 'mandates', element: <Mandates /> },
+      { path: 'settings', element: <Settings /> },
     ],
   },
 ])

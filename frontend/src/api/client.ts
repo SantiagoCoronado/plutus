@@ -646,6 +646,51 @@ export interface CsvCommitResult {
   errors: { row?: number; error: string }[]
 }
 
+// --- agent layer (Phase 6) ---
+
+export type LLMProviderName =
+  | 'claude-subscription'
+  | 'anthropic-api'
+  | 'openai'
+  | 'google'
+  | 'openrouter'
+  | 'ollama'
+
+export interface LLMSettings {
+  provider: LLMProviderName
+  model: string
+  keys: Record<string, string | null>
+  sidecar: { url: string; reachable: boolean; auth_ok: boolean }
+  daily_token_budget: number
+  fernet_configured: boolean
+}
+
+export interface TestConnectionResult {
+  ok: boolean
+  provider: string
+  detail: string
+}
+
+export interface AgentUsage {
+  date: string
+  tokens_used: number
+  daily_token_budget: number
+  remaining: number
+}
+
+export interface AgentAction {
+  id: number
+  conversation_id: number | null
+  source: 'app' | 'task' | 'mcp'
+  tier: 'read' | 'write'
+  name: string
+  arguments: Record<string, unknown>
+  status: string
+  result_summary: string | null
+  error: string | null
+  created_at: string
+}
+
 export function getCurrency(): string {
   return localStorage.getItem('plutus_currency') ?? 'USD'
 }
@@ -840,6 +885,27 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+
+  agentSettings: () => request<LLMSettings>('/agent/settings'),
+  updateAgentSettings: (body: {
+    provider?: LLMProviderName
+    model?: string
+    keys?: Record<string, string>
+  }) => request<LLMSettings>('/agent/settings', { method: 'PUT', body: JSON.stringify(body) }),
+  testAgentConnection: (provider?: LLMProviderName) =>
+    request<TestConnectionResult>('/agent/settings/test', {
+      method: 'POST',
+      body: JSON.stringify({ provider: provider ?? null }),
+    }),
+  agentUsage: () => request<AgentUsage>('/agent/usage'),
+  agentActions: (filters?: { source?: string; tier?: string; limit?: number }) => {
+    const params = new URLSearchParams()
+    if (filters?.source) params.set('source', filters.source)
+    if (filters?.tier) params.set('tier', filters.tier)
+    if (filters?.limit) params.set('limit', String(filters.limit))
+    const qs = params.toString()
+    return request<AgentAction[]>(`/agent/actions${qs ? `?${qs}` : ''}`)
+  },
 }
 
 // --- shared formatting helpers -------------------------------------------------

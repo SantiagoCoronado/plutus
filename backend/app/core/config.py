@@ -60,6 +60,26 @@ class Settings(BaseSettings):
     # remind this many days before a fixed-term bank investment matures (spec §7.4)
     maturity_reminder_days: int = 7
 
+    # --- AI agent layer (spec §13) — env values are the seed; app_settings rows
+    # (Settings UI) override them so the provider can switch without a restart.
+    llm_provider: str = "claude-subscription"
+    llm_model: str = ""  # provider-specific model id override
+    # the Node sidecar wrapping the claude agent SDK (compose: http://agent-sidecar:8787).
+    # CLAUDE_CODE_OAUTH_TOKEN is consumed by the sidecar container only, never here.
+    claude_sidecar_url: str = "http://localhost:8787"
+    anthropic_api_key: str = ""
+    openai_api_key: str = ""
+    google_api_key: str = ""
+    openrouter_api_key: str = ""
+    ollama_base_url: str = "http://localhost:11434"
+    # hard daily cap across chat + research tasks + translations (spec §13.4)
+    agent_daily_token_budget: int = 500_000
+    agent_max_tool_iterations: int = 15
+    agent_nightly_memo_limit: int = 3
+    mcp_tool_tier: str = "write"  # read = queries only over MCP
+    # encrypts secret app_settings values (API keys) at rest
+    fernet_key: str = ""
+
     @property
     def sqlalchemy_url(self) -> str:
         url = self.database_url

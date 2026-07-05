@@ -102,6 +102,9 @@ export default function App() {
             <NavLink to="/mandates" className={navClass}>
               Mandates
             </NavLink>
+            <NavLink to="/settings" className={navClass}>
+              Settings
+            </NavLink>
           </nav>
         </div>
         <div className="max-w-md flex-1">

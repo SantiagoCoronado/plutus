@@ -22,6 +22,23 @@ os.environ["COINGECKO_API_KEY"] = ""
 os.environ["PROVIDER_STOCKS"] = "tiingo"
 os.environ["PROVIDER_CRYPTO"] = "binance"
 os.environ["PROVIDER_FOREX"] = "twelvedata"
+# alert channels MUST be blank: the developer's real .env has live SMTP creds, and
+# without this a "no channels configured" test once sent an actual email mid-suite
+os.environ["SMTP_HOST"] = ""
+os.environ["SMTP_USER"] = ""
+os.environ["SMTP_PASS"] = ""
+os.environ["ALERT_EMAIL_TO"] = ""
+os.environ["ALERT_EMAIL_FROM"] = ""
+os.environ["TELEGRAM_BOT_TOKEN"] = ""
+os.environ["TELEGRAM_CHAT_ID"] = ""
+# agent layer: never probe a real sidecar or spend real tokens from tests
+os.environ["CLAUDE_SIDECAR_URL"] = "http://127.0.0.1:1"
+os.environ["LLM_PROVIDER"] = "claude-subscription"
+os.environ["FERNET_KEY"] = ""
+os.environ["ANTHROPIC_API_KEY"] = ""
+os.environ["OPENAI_API_KEY"] = ""
+os.environ["GOOGLE_API_KEY"] = ""
+os.environ["OPENROUTER_API_KEY"] = ""
 # ------------------------------------------------------------------------------
 
 import json
@@ -79,7 +96,9 @@ def clean_state(test_database):
                 "TRUNCATE ohlcv, ingestion_runs, assets, asset_metrics, fundamentals, "
                 "watchlist_items, asset_notes, news_items, screens, backtests, "
                 "mandates, scans, candidates, notifications, "
-                "accounts, transactions, bank_investments "
+                "accounts, transactions, bank_investments, "
+                "app_settings, agent_conversations, agent_messages, agent_tool_calls, "
+                "strategy_translations "
                 "RESTART IDENTITY CASCADE"
             )
         )
