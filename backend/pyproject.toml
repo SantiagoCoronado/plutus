@@ -25,6 +25,9 @@ dependencies = [
     "mcp>=1.28.1",
 ]
 
+[project.scripts]
+plutus-mcp = "app.llm.mcp_server:main"
+
 [dependency-groups]
 dev = [
     "pytest>=8.4",

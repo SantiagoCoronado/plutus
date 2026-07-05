@@ -4,8 +4,10 @@ import sys
 import structlog
 
 
-def configure_logging(level: int = logging.INFO) -> None:
-    logging.basicConfig(format="%(message)s", stream=sys.stdout, level=level)
+def configure_logging(level: int = logging.INFO, *, stream=None) -> None:
+    # the MCP stdio server passes stream=sys.stderr: stdout is the protocol wire
+    stream = stream or sys.stdout
+    logging.basicConfig(format="%(message)s", stream=stream, level=level)
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
@@ -16,7 +18,7 @@ def configure_logging(level: int = logging.INFO) -> None:
             structlog.processors.JSONRenderer(),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(level),
-        logger_factory=structlog.PrintLoggerFactory(sys.stdout),
+        logger_factory=structlog.PrintLoggerFactory(stream),
         cache_logger_on_first_use=True,
     )
 
