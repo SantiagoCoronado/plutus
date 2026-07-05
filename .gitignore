@@ -27,3 +27,4 @@ celerybeat-schedule*
 
 # Backtest artifacts (quantstats HTML reports; containers use a named volume)
 backend/artifacts/
+.playwright-mcp/

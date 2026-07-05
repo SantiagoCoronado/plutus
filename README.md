@@ -4,7 +4,7 @@ Self-hosted, single-user investment research, opportunity-discovery, and portfol
 hub for stocks/ETFs, crypto, and forex. **Research and analysis only — no trade execution,
 ever.** Full specification: `investment-hub-spec.md` (kept outside the repo).
 
-**Status: Phase 5 complete** — portfolio tracking + fundamentals signal pack (of 7 phases).
+**Status: Phase 6 complete** — AI research agent + MCP control plane (of 7 phases).
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -13,7 +13,7 @@ ever.** Full specification: `investment-hub-spec.md` (kept outside the repo).
 | 3 | Screener (filter AST) + backtesting (VectorBT / Backtrader + quantstats) | ✅ |
 | 4 | Autonomous discovery engine (mandates → scans → ranked inbox + alerts) | ✅ |
 | 5 | Portfolio tracking (transactions, P&L, TWR/IRR, bank investments) + fundamentals signal pack | ✅ |
-| 6 | AI research agent (candidate memos, strategy-from-content translator) + MCP control plane | — |
+| 6 | AI research agent (candidate memos, strategy-from-content translator) + MCP control plane | ✅ |
 | 7 | Exchange sync, live quotes, per-asset price alerts, hardening | — |
 
 ## Stack
@@ -161,6 +161,53 @@ Nightly ingestion runs via Celery Beat at 03:00/03:10/03:20 America/Mexico_City
   (Magic-Formula-style rank of earnings yield × return on invested capital vs the
   universe). Both stock-only; coverage grows as the weekly fundamentals rotation fills.
 
+## AI research agent (Phase 6)
+
+- **One tool registry, three surfaces** (`app/llm/tooldefs.py`): 21 tools (13 read /
+  8 write) wrapping the hub's own services are served identically to the in-app chat,
+  Celery research tasks, and the MCP server — they can never drift. Every call goes
+  through one executor (validation → tier gate → confirmation gate → audit row in
+  `agent_tool_calls`); a "recent agent actions" feed on the Settings page shows all of
+  it. Hard-coded exclusions (editing/deleting transactions, touching LLM settings or
+  alert channels, deleting mandates/watchlists/notes, anything trade-shaped) simply do
+  not exist as tools — no configuration can expose them.
+- **User-selectable LLM provider** (Settings page, no restart needed): default
+  **claude-subscription** — a small Node sidecar (`sidecar/`) wraps
+  `@anthropic-ai/claude-agent-sdk` so the agent runs on your Claude plan: run
+  `claude setup-token`, paste the result as `CLAUDE_CODE_OAUTH_TOKEN` in `.env`,
+  `docker compose up -d agent-sidecar`. Never set `ANTHROPIC_API_KEY` in the sidecar's
+  environment (it would silently switch billing to the API; the server deletes it
+  defensively). Alternatives: `anthropic-api`, `openai`, `google`, `openrouter`, and
+  `ollama` (local) — API keys entered in Settings are Fernet-encrypted at rest
+  (`FERNET_KEY` in `.env`) and shown masked.
+- **Agent chat** (`/agent`): streaming conversations over hub data with tool-call
+  chips. Write-tier actions render as **confirmation cards** — the model proposes,
+  you approve or reject — unless you flip a conversation to autonomous mode. Every
+  reply is AI-labeled; the system prompt forbids trade recommendations phrased as
+  instructions.
+- **Research memos**: an "AI deep-dive" button on any asset page / Inbox card (and a
+  nightly 08:15 task over the top new candidates above their mandate's alert
+  threshold) runs a structured loop — overview → fundamentals → news → signal
+  backtests — and writes an AI-labeled note ending with a mandatory
+  informational-only disclaimer. Memos link back to their Inbox candidate.
+- **Strategy-from-content translator** (spec §13.5, "Test a strategy" on the
+  Backtests page): paste an article/transcript/your own words; the LLM translates it
+  into the *existing* strategy AST — never free-form code — and must present a
+  **fidelity report** first: its plain-English understanding plus everything the
+  daily-bar engine *cannot* express (intraday rules, leverage, options legs…). The
+  backtest runs only after you confirm; results come back as a plain-English verdict
+  vs buy-and-hold. Candlestick patterns (engulfing, hammer, shooting star, doji) are
+  legal condition vocabulary — pure OHLC math, kept out of the screener snapshot.
+- **MCP control plane**: `claude mcp add plutus -- uv --directory ~/plutus/backend run plutus-mcp`
+  gives terminal Claude Code the same registry over stdio ("create a mandate for
+  oversold large caps and run it now"). `MCP_TOOL_TIER=read` locks it to queries;
+  writes are audited with `source=mcp`. Requires the compose db/redis reachable on
+  localhost (the root `.env` dev values).
+- **Guardrails**: `AGENT_DAILY_TOKEN_BUDGET` (default 500k) is a hard daily cap
+  summed over every surface; tool loops cap at `AGENT_MAX_TOOL_ITERATIONS` (15);
+  tool outputs are size-clipped; scheduled tasks skip-and-log when the budget is
+  spent. The app is fully usable with the AI layer unconfigured.
+
 ## Notes & deliberate decisions
 
 - **Stocks store the adjusted series** (Tiingo `adj*` columns) so indicators are
@@ -183,9 +230,8 @@ Nightly ingestion runs via Celery Beat at 03:00/03:10/03:20 America/Mexico_City
 - Beat schedule (America/Mexico_City): EOD 03:00/03:10/03:20 · metrics 06:30 ·
   news every 15 min · fundamentals Sun 06:30 (stalest-first, capped at 32 assets/run to
   respect the FMP day budget — the ~100-stock universe rotates over ~3 weeks) ·
-  discovery dispatcher every 5 min · alert digest 08:00 · maturity check 08:30.
-  Schedule mandates after 06:30
-  so scans read fresh metrics.
+  discovery dispatcher every 5 min · alert digest 08:00 · AI research memos 08:15 ·
+  maturity check 08:30. Schedule mandates after 06:30 so scans read fresh metrics.
 - **The ~100-stock nightly ingestion paces at Tiingo's bucket (~80s/symbol, ≈2.3h)** —
   ingest tasks carry 4h Celery time limits, and the metrics beat runs after the window.
 - Backtest guardrails: point-in-time panels only (no forward-fill of signals), next-bar

@@ -6,8 +6,10 @@ x-backend-env: &backend-env
   REDIS_URL: redis://redis:6379/0
   # shared volume: the worker writes quantstats reports, the API serves them
   ARTIFACTS_DIR: /srv/artifacts
-  # the claude-subscription provider's sidecar (see the agent-sidecar service)
-  CLAUDE_SIDECAR_URL: http://agent-sidecar:8787
+  # the claude-subscription provider's sidecar (see the agent-sidecar service).
+  # The override exists for dev: point the backend at a natively-run sidecar
+  # (e.g. http://host.docker.internal:8787) that uses the machine's Claude login.
+  CLAUDE_SIDECAR_URL: ${CLAUDE_SIDECAR_URL_OVERRIDE:-http://agent-sidecar:8787}
 
 services:
   db:
