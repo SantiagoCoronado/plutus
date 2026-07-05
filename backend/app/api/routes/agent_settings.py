@@ -111,10 +111,23 @@ def test_connection(body: TestConnectionIn, db: Session = Depends(get_db)):
 
 
 def _test_api_provider(cfg, provider: str) -> TestConnectionOut:
-    # replaced with a real 1-token ping when the provider layer lands (M3)
-    return TestConnectionOut(
-        ok=False, provider=provider, detail="provider ping not implemented yet"
-    )
+    import asyncio
+    from dataclasses import replace
+
+    from app.llm.base import LLMError
+    from app.llm.providers import build_provider
+    from app.llm.types import Message
+
+    try:
+        adapter = build_provider(replace(cfg, provider=provider))
+        response = asyncio.run(
+            adapter.chat([Message(role="user", content="ping")], max_tokens=1)
+        )
+        model = getattr(adapter, "model", "")
+        detail = f"connected — model {model}, {response.usage.total} tokens used"
+        return TestConnectionOut(ok=True, provider=provider, detail=detail)
+    except LLMError as exc:
+        return TestConnectionOut(ok=False, provider=provider, detail=str(exc))
 
 
 @router.get("/usage", response_model=UsageOut)
