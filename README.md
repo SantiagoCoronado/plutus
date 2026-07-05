@@ -12,9 +12,9 @@ ever.** Full specification: `investment-hub-spec.md` (kept outside the repo).
 | 2 | Research core: charts, indicators, `asset_metrics`, watchlists, fundamentals, news, notes | ✅ |
 | 3 | Screener (filter AST) + backtesting (VectorBT / Backtrader + quantstats) | ✅ |
 | 4 | Autonomous discovery engine (mandates → scans → ranked inbox + alerts) | ✅ |
-| 5 | Portfolio tracking (transactions, P&L, TWR/IRR, bank investments) | — |
-| 6 | Exchange sync, websockets, hardening | — |
-| 7 | AI research agent + MCP control plane | — |
+| 5 | Portfolio tracking (transactions, P&L, TWR/IRR, bank investments) + fundamentals signal pack | — |
+| 6 | AI research agent (candidate memos, strategy-from-content translator) + MCP control plane | — |
+| 7 | Exchange sync, live quotes, per-asset price alerts, hardening | — |
 
 ## Stack
 
