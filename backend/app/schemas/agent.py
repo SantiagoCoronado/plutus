@@ -78,3 +78,8 @@ class ToolExecuteIn(BaseModel):
     name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
     conversation_id: int | None = None
+
+
+class DeepDiveIn(BaseModel):
+    asset_id: int | None = None
+    candidate_id: int | None = None

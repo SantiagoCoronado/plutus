@@ -398,6 +398,7 @@ export interface CandidateContext {
   snapshot?: Record<string, number | string | null>
   history_check?: Record<string, HistoryCheck>
   chart?: [string, number][]
+  memo_note_id?: number
 }
 
 export interface Candidate {

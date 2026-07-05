@@ -71,4 +71,10 @@ celery_app.conf.beat_schedule = {
         "task": "worker.tasks.check_maturities",
         "schedule": crontab(hour=8, minute=30),
     },
+    # AI research memos for last night's top candidates — after the 06:30 metrics
+    # refresh and 07:30 preset scans so memos cover the same morning's inbox
+    "agent-research-memos": {
+        "task": "worker.tasks.run_nightly_research_memos",
+        "schedule": crontab(hour=8, minute=15),
+    },
 }

@@ -107,3 +107,21 @@ def check_maturities() -> int:
     from app.portfolio.maturities import run_maturity_check
 
     return run_maturity_check()
+
+
+@celery_app.task(name="worker.tasks.run_agent_deep_dive", time_limit=900, soft_time_limit=840)
+def run_agent_deep_dive(conversation_id: int) -> int:
+    """Execute a queued AI deep-dive task conversation; the UI polls the row."""
+    from app.llm.research import run_deep_dive
+
+    return run_deep_dive(conversation_id)
+
+
+@celery_app.task(
+    name="worker.tasks.run_nightly_research_memos", time_limit=3600, soft_time_limit=3480
+)
+def run_nightly_research_memos() -> list[int]:
+    """Nightly beat: AI research memos for the best new candidates above threshold."""
+    from app.llm.research import run_nightly_memos
+
+    return run_nightly_memos()

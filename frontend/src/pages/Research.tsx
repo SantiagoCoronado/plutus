@@ -7,6 +7,7 @@ import {
   type Candle,
   type IndicatorSeries,
 } from '../api/client'
+import DeepDiveButton from '../components/agent/DeepDiveButton'
 import ChartContainer from '../components/research/ChartContainer'
 import FundamentalsTab from '../components/research/FundamentalsTab'
 import IndicatorPicker from '../components/research/IndicatorPicker'
@@ -93,7 +94,10 @@ export default function Research() {
           </span>
           {asset.exchange && <span className="text-xs text-zinc-600">{asset.exchange}</span>}
         </div>
-        <WatchlistButton assetId={assetId} />
+        <div className="flex items-center gap-2">
+          <DeepDiveButton assetId={assetId} />
+          <WatchlistButton assetId={assetId} />
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_280px]">

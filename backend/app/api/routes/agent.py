@@ -27,6 +27,7 @@ from app.schemas.agent import (
     ConversationIn,
     ConversationOut,
     ConversationPatch,
+    DeepDiveIn,
     MessageOut,
     SendMessageIn,
     ToolExecuteIn,
@@ -150,6 +151,53 @@ def send_message(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post("/deep-dives", status_code=202)
+def create_deep_dive(body: DeepDiveIn, db: Session = Depends(get_db)):
+    """Queue an AI deep-dive: a structured research loop ending in a memo note."""
+    from app.models import Asset, Candidate
+
+    candidate = None
+    asset_id = body.asset_id
+    if body.candidate_id is not None:
+        candidate = db.get(Candidate, body.candidate_id)
+        if candidate is None:
+            raise HTTPException(status_code=404, detail="candidate not found")
+        asset_id = candidate.asset_id
+    if asset_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail={"errors": [{"path": "asset_id",
+                                "error": "asset_id or candidate_id is required"}]},
+        )
+    asset = db.get(Asset, asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="asset not found")
+
+    conversation = AgentConversation(
+        kind="task",
+        status="queued",
+        autonomous=True,
+        title=f"Deep dive — {asset.symbol}",
+        task_meta={
+            "asset_id": asset.id,
+            "candidate_id": candidate.id if candidate else None,
+            "trigger": "manual",
+        },
+    )
+    db.add(conversation)
+    db.commit()
+    db.refresh(conversation)
+    try:
+        from worker.tasks import run_agent_deep_dive
+
+        run_agent_deep_dive.delay(conversation.id)
+    except Exception as exc:
+        db.delete(conversation)
+        db.commit()
+        raise HTTPException(status_code=503, detail="could not enqueue deep dive") from exc
+    return {"conversation_id": conversation.id, "symbol": asset.symbol}
 
 
 @router.post("/confirmations/{confirmation_id}/approve",

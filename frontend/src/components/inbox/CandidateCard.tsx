@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, relTime, type Candidate, type CandidateSignal } from '../../api/client'
+import DeepDiveButton from '../agent/DeepDiveButton'
 import Sparkline from '../Sparkline'
 
 export function ScoreBadge({ score }: { score: number }) {
@@ -98,9 +99,23 @@ export default function CandidateCard({
         ) : (
           <p className="text-xs text-zinc-600">No history check for this signal</p>
         )}
-        <p className="text-xs text-zinc-600">
-          {candidate.mandate_name} · {relTime(candidate.created_at)}
-        </p>
+        <div className="flex items-center gap-2 text-xs text-zinc-600">
+          <span>
+            {candidate.mandate_name} · {relTime(candidate.created_at)}
+          </span>
+          {candidate.context.memo_note_id ? (
+            <Link
+              to={`/asset/${candidate.asset_id}`}
+              onClick={markReviewed}
+              className="rounded bg-violet-950 px-1.5 py-0.5 text-[11px] text-violet-300 hover:bg-violet-900"
+              title="An AI research memo was written for this candidate — it's in the asset's Notes tab"
+            >
+              AI memo ↗
+            </Link>
+          ) : (
+            <DeepDiveButton candidateId={candidate.id} compact />
+          )}
+        </div>
       </div>
       <div className="flex shrink-0 flex-col items-end gap-2">
         <Sparkline values={sparkValues} width={110} height={28} />
