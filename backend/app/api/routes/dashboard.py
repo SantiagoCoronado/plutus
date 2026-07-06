@@ -257,27 +257,32 @@ def _portfolio_tiles(db: Session, ccy: str, column: str) -> list[dict]:
     changes = _change_map(db, asset_ids, column)
     sectors = _sector_map(db, asset_ids)
 
-    tiles = []
+    # compute_positions returns one row per (account, asset) — a treemap wants one
+    # tile per asset, so merge value/pnl across accounts before sizing
+    merged: dict[int, dict] = {}
     for position in positions:
         value = position["value"] or 0.0
         if value <= 0:
             continue  # a treemap can't size a zero/negative tile
+        tile = merged.get(position["asset_id"])
+        if tile is not None:
+            tile["size"] += value
+            tile["pnl"] = (tile["pnl"] or 0.0) + (position["unrealized_pnl"] or 0.0)
+            continue
         change = changes.get(position["asset_id"])
-        tiles.append(
-            {
-                "symbol": position["symbol"],
-                "asset_id": position["asset_id"],
-                "name": position["name"],
-                "asset_class": position["asset_class"],
-                "sector": sectors.get(position["asset_id"]),
-                "size": value,
-                "change_pct": round(change * 100, 4) if change is not None else 0.0,
-                "price": position["last_price"],
-                "weight_pct": None,
-                "pnl": position["unrealized_pnl"],
-            }
-        )
-    return tiles
+        merged[position["asset_id"]] = {
+            "symbol": position["symbol"],
+            "asset_id": position["asset_id"],
+            "name": position["name"],
+            "asset_class": position["asset_class"],
+            "sector": sectors.get(position["asset_id"]),
+            "size": value,
+            "change_pct": round(change * 100, 4) if change is not None else 0.0,
+            "price": position["last_price"],
+            "weight_pct": None,
+            "pnl": position["unrealized_pnl"],
+        }
+    return list(merged.values())
 
 
 def _universe_tiles(db: Session, column: str, *, watchlist_only: bool) -> list[dict]:
