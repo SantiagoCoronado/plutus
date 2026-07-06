@@ -74,8 +74,30 @@ BENCHMARK_ASSETS: list[dict] = [
 ]
 
 
+# Extra market-strip members (dashboard §9.1 + the live-quote streamer) that aren't
+# already benchmarks: ETH mirrors BTC's crypto shape; QQQ is a benchmark-style ETF.
+MARKET_STRIP_ASSETS: list[dict] = [
+    {
+        "symbol": "ETH",
+        "name": "Ethereum",
+        "asset_class": "crypto",
+        "exchange": None,
+        "currency": "USD",
+        "metadata": {"provider_symbols": {"coingecko": "ethereum", "binance": "ETHUSDT"}},
+    },
+    {
+        "symbol": "QQQ",
+        "name": "Invesco QQQ Trust",
+        "asset_class": "etf",
+        "exchange": "NASDAQ",
+        "currency": "USD",
+        "metadata": {"provider_symbols": {"tiingo": "QQQ"}, "benchmark": True},
+    },
+]
+
+
 def seed_assets() -> list[tuple[int, str]]:
-    specs = SEED_ASSETS + BENCHMARK_ASSETS
+    specs = SEED_ASSETS + BENCHMARK_ASSETS + MARKET_STRIP_ASSETS
     with session_scope() as session:
         for spec in specs:
             # insert on the table, not the ORM class: the "metadata" column name would

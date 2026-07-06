@@ -11,8 +11,18 @@ from tests.integration.conftest import mock_all_providers
 
 pytestmark = pytest.mark.integration
 
-# golden fixtures: tiingo 3 bars (AAPL/SPY/UUP), binance 4 klines, twelvedata 3 bars
-EXPECTED_BARS = {"AAPL": 3, "BTC": 4, "EURUSD": 3, "USDMXN": 3, "SPY": 3, "UUP": 3}
+# golden fixtures: tiingo 3 bars (AAPL/SPY/UUP/QQQ), binance 4 klines (BTC/ETH),
+# twelvedata 3 bars (EURUSD/USDMXN)
+EXPECTED_BARS = {
+    "AAPL": 3,
+    "BTC": 4,
+    "ETH": 4,
+    "EURUSD": 3,
+    "USDMXN": 3,
+    "SPY": 3,
+    "UUP": 3,
+    "QQQ": 3,
+}
 
 
 def bar_counts() -> dict[str, int]:
@@ -75,7 +85,7 @@ def test_partial_failure_records_errors(respx_mock):
     run_id = run_eod_ingestion("stock")
     run = get_runs([run_id])[0]
     assert run.status == "partial"
-    assert run.symbols_ok == 3  # AAPL + benchmark ETFs (SPY, UUP)
+    assert run.symbols_ok == 4  # AAPL + benchmark/strip ETFs (SPY, UUP, QQQ)
     assert run.symbols_failed == 1
     assert "FAKE" in run.details["errors"]
     assert bar_counts()["AAPL"] == EXPECTED_BARS["AAPL"]  # the good symbol still landed

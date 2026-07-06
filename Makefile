@@ -1,4 +1,4 @@
-.PHONY: infra infra-down api worker beat seed ingest test test-integration lint up down logs guard-tasa
+.PHONY: infra infra-down api worker beat quotes seed ingest test test-integration lint up down logs guard-tasa
 
 GUARD_DIRS := backend/app backend/worker frontend/src sidecar scripts
 
@@ -17,6 +17,9 @@ worker:           ## run Celery worker natively
 
 beat:             ## run Celery beat natively
 	cd backend && uv run celery -A worker.celery_app beat -l info --schedule /tmp/plutus-celerybeat-schedule
+
+quotes:           ## run the live-quote streamer natively
+	cd backend && uv run python -m app.quotes.streamer
 
 migrate:          ## apply migrations
 	cd backend && uv run alembic upgrade head

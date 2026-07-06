@@ -23,6 +23,7 @@ dependencies = [
     "cryptography>=49.0.0",
     "jsonschema>=4.26.0",
     "mcp>=1.28.1",
+    "websockets>=13,<16",
 ]
 
 [project.scripts]

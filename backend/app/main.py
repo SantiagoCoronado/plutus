@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from app.api.router import api_router
+from app.api.routes.ws_quotes import quotes_ws
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 
@@ -29,6 +30,9 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(api_router)
+    # live-quote websocket lives on the raw app: a websocket handshake can't run the
+    # bearer Depends, so it validates its own ?token= against APP_AUTH_TOKEN.
+    app.add_api_websocket_route("/ws/quotes", quotes_ws)
 
     @app.get("/health")
     def health():

@@ -78,7 +78,7 @@ class TestMetricsRefresh:
                 )
             ).all()
         by_symbol = {r.symbol: r for r in rows}
-        assert len(by_symbol) == 6
+        assert len(by_symbol) == 8  # AAPL, BTC, ETH, EURUSD, USDMXN, SPY, UUP, QQQ
         # forex: volume metrics NULL, price metrics present
         eurusd = by_symbol["EURUSD"]
         assert eurusd.rsi_14 is not None
@@ -96,7 +96,7 @@ class TestMetricsRefresh:
         run_metrics()
         with session_scope() as session:
             second = session.execute(sa.text("SELECT count(*) FROM asset_metrics")).scalar()
-        assert first == second == 6
+        assert first == second == 8
 
 
 class TestResampling:
@@ -216,7 +216,7 @@ class TestNewsFlow:
                 sa.text("SELECT tickers FROM news_items ORDER BY ts DESC LIMIT 1")
             ).scalar()
         assert first_count == 2  # 2 valid fixture URLs
-        assert set(tickers) == {"AAPL", "SPY", "UUP"}
+        assert set(tickers) == {"AAPL", "SPY", "UUP", "QQQ"}
 
         run_news_pull()  # cache TTL may serve, but dedup must hold regardless
         with session_scope() as session:

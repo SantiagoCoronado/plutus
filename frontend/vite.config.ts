@@ -10,6 +10,8 @@ export default defineConfig({
       // backend runs on host port 8800 (see Makefile `make api` / docker-compose)
       '/api': 'http://localhost:8800',
       '/health': 'http://localhost:8800',
+      // live-quote websocket (ws:true upgrades the proxied connection)
+      '/ws': { target: 'http://localhost:8800', ws: true },
     },
   },
 })

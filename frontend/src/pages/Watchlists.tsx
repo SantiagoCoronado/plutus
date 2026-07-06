@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, fmtNum, fmtPct, pctClass, type Watchlist } from '../api/client'
+import { useQuotes } from '../hooks/useQuotes'
 
 export default function Watchlists() {
   const [watchlists, setWatchlists] = useState<Watchlist[] | null>(null)
@@ -11,6 +12,12 @@ export default function Watchlists() {
   useEffect(() => {
     load()
   }, [])
+
+  const symbols = useMemo(
+    () => (watchlists ?? []).flatMap((w) => w.items.map((i) => i.symbol)),
+    [watchlists],
+  )
+  const { quotes } = useQuotes(symbols)
 
   if (watchlists === null) return <p className="text-sm text-zinc-500">Loading…</p>
 
@@ -76,7 +83,13 @@ export default function Watchlists() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-900">
-                {watchlist.items.map((item) => (
+                {watchlist.items.map((item) => {
+                  const tick = quotes[item.symbol.toUpperCase()]
+                  const live = tick !== undefined
+                  // live change_pct is a percent (e.g. 1.23); fmtPct expects a fraction
+                  const close = live ? tick.price : item.close
+                  const change = live ? tick.change_pct / 100 : item.return_1d
+                  return (
                   <tr key={item.asset_id} className="hover:bg-zinc-900/50">
                     <td className="px-4 py-2">
                       <Link to={`/asset/${item.asset_id}`} className="font-medium hover:text-sky-300">
@@ -87,9 +100,17 @@ export default function Watchlists() {
                       </span>
                     </td>
                     <td className="px-4 py-2 text-zinc-400">{item.name}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{fmtNum(item.close)}</td>
-                    <td className={`px-4 py-2 text-right tabular-nums ${pctClass(item.return_1d)}`}>
-                      {fmtPct(item.return_1d)}
+                    <td className="px-4 py-2 text-right tabular-nums">
+                      <span
+                        className={`mr-1.5 inline-block h-1.5 w-1.5 rounded-full align-middle ${
+                          live ? 'bg-emerald-400' : 'bg-zinc-700'
+                        }`}
+                        title={live ? `live · ${tick.source}` : 'end-of-day close'}
+                      />
+                      {fmtNum(close)}
+                    </td>
+                    <td className={`px-4 py-2 text-right tabular-nums ${pctClass(change)}`}>
+                      {fmtPct(change)}
                     </td>
                     <td className="px-4 py-2 text-right">
                       <button
@@ -104,7 +125,8 @@ export default function Watchlists() {
                       </button>
                     </td>
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
             </table>
           )}

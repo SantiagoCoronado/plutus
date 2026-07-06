@@ -88,6 +88,20 @@ services:
       worker:
         condition: service_started
 
+  # live-quote streamer (Phase 7 M3): persistent Binance WS + poller fan-out over
+  # Redis pub/sub. Not a Celery task — a long-running WS consumer doesn't fit beat.
+  quotes:
+    build: ./backend
+    command: python -m app.quotes.streamer
+    env_file: .env
+    environment: *backend-env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
   # claude-subscription LLM provider (spec §13.1): wraps the claude agent SDK on
   # the user's Claude plan. Deliberately NOT a dependency of anything — if it's
   # down, only the claude-subscription option in Settings degrades.
