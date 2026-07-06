@@ -13,8 +13,9 @@ test locks this.
 
 Excluded operations (spec §13.2) are structural: the registry simply never
 defines them, so no configuration can expose them to any agent surface.
-`create_alert_rule` / `delete_alert_rule` from the spec table are deferred
-with per-asset price alerts to Phase 7 — no alert-rule model exists yet.
+`list_alert_rules` / `create_alert_rule` / `delete_alert_rule` (the Phase 7
+per-asset price alerts) now exist; `update_alert_channels` stays excluded so
+the agent can never change how alerts are delivered.
 """
 
 from __future__ import annotations
@@ -475,6 +476,38 @@ def _get_ingestion_status(session: Session, args: dict) -> Any:
     }
 
 
+def _list_alert_rules(session: Session, args: dict) -> Any:
+    from app.models import AlertRule, Asset
+
+    stmt = (
+        select(AlertRule, Asset.symbol)
+        .join(Asset, Asset.id == AlertRule.asset_id)
+        .order_by(AlertRule.created_at.desc(), AlertRule.id.desc())
+    )
+    if args.get("symbol"):
+        asset = _resolve_asset(session, args["symbol"])
+        stmt = stmt.where(AlertRule.asset_id == asset.id)
+    rows = session.execute(stmt).all()
+    return {
+        "alerts": [
+            {
+                "id": rule.id,
+                "symbol": symbol,
+                "condition": rule.condition,
+                "threshold": float(rule.threshold),
+                "status": rule.status,
+                "note": rule.note,
+                "last_price": float(rule.last_price) if rule.last_price is not None else None,
+                "last_triggered_at": (
+                    rule.last_triggered_at.isoformat() if rule.last_triggered_at else None
+                ),
+                "created_at": rule.created_at.isoformat(),
+            }
+            for rule, symbol in rows
+        ]
+    }
+
+
 # --- write tier ------------------------------------------------------------------
 
 
@@ -733,6 +766,48 @@ def _add_transaction(session: Session, args: dict) -> Any:
         "currency": txn.currency,
         "note": "create-only: the agent can never edit or delete transactions",
     }
+
+
+def _create_alert_rule(session: Session, args: dict) -> Any:
+    from fastapi import HTTPException
+
+    from app.api.routes.alerts import create_alert
+    from app.schemas.alerts import AlertRuleIn
+
+    asset = _resolve_asset(session, args["symbol"])
+    try:
+        body = AlertRuleIn(
+            asset_id=asset.id,
+            condition=args.get("condition"),
+            threshold=args.get("threshold"),
+            note=args.get("note"),
+        )
+    except ValidationError as exc:
+        raise ToolInputError(f"invalid alert rule: {exc}") from exc
+    try:
+        rule = create_alert(session, body)
+    except HTTPException as exc:
+        raise ToolInputError(f"invalid alert rule: {_http_detail(exc)}") from exc
+    return {
+        "alert_id": rule.id,
+        "symbol": asset.symbol,
+        "condition": rule.condition,
+        "threshold": float(rule.threshold),
+        "status": rule.status,
+    }
+
+
+def _delete_alert_rule(session: Session, args: dict) -> Any:
+    from app.models import AlertRule, Asset
+
+    rule = session.get(AlertRule, int(args["alert_id"]))
+    if rule is None:
+        raise ToolInputError("alert rule not found — call list_alert_rules for valid ids")
+    asset = session.get(Asset, rule.asset_id)
+    symbol = asset.symbol if asset else None
+    session.delete(rule)
+    session.flush()
+    return {"deleted_alert_id": int(args["alert_id"]), "symbol": symbol}
 
 
 def _translate_strategy(session: Session, args: dict) -> Any:
@@ -1005,6 +1080,19 @@ def _build_tools() -> dict[str, ToolDef]:
             summarize=lambda args, result: f"{len(result['recent_runs'])} recent runs",
         ),
         ToolDef(
+            name="list_alert_rules",
+            description=(
+                "List per-asset price alert rules with their condition, threshold, and "
+                "status (armed | triggered | disabled). Optionally filter to one symbol."
+            ),
+            tier="read",
+            schema=_obj(
+                {"symbol": {"type": "string", "description": "filter to one asset"}}, []
+            ),
+            handler=_list_alert_rules,
+            summarize=lambda args, result: f"{len(result['alerts'])} alert rules",
+        ),
+        ToolDef(
             name="translate_strategy",
             description=(
                 "Translate a pasted strategy description (article, transcript, or "
@@ -1177,6 +1265,38 @@ def _build_tools() -> dict[str, ToolDef]:
             summarize=lambda args, result: (
                 f"logged transaction #{result['transaction_id']} ({result['type']})"
             ),
+        ),
+        ToolDef(
+            name="create_alert_rule",
+            description=(
+                "Create a per-asset price alert. condition 'above' fires when the price "
+                "crosses up through the threshold, 'below' when it crosses down. The "
+                "alert fires once on a crossing, then waits for an explicit re-arm — it "
+                "never places a trade."
+            ),
+            tier="write",
+            schema=_obj(
+                {
+                    "symbol": {"type": "string"},
+                    "condition": {"type": "string", "enum": ["above", "below"]},
+                    "threshold": {"type": "number", "description": "price level to cross"},
+                    "note": {"type": "string"},
+                },
+                ["symbol", "condition", "threshold"],
+            ),
+            handler=_create_alert_rule,
+            summarize=lambda args, result: (
+                f"created alert #{result['alert_id']}: {result['symbol']} "
+                f"{result['condition']} {result['threshold']}"
+            ),
+        ),
+        ToolDef(
+            name="delete_alert_rule",
+            description="Delete a price alert rule by its id (call list_alert_rules first).",
+            tier="write",
+            schema=_obj({"alert_id": {"type": "integer"}}, ["alert_id"]),
+            handler=_delete_alert_rule,
+            summarize=lambda args, result: f"deleted alert #{result['deleted_alert_id']}",
         ),
     ]
     return {tool.name: tool for tool in tools}

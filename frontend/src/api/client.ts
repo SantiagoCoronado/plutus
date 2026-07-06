@@ -766,6 +766,34 @@ export interface StrategyTranslation {
   updated_at: string
 }
 
+// --- alerts (Phase 7) ---
+
+export type AlertCondition = 'above' | 'below'
+export type AlertStatus = 'armed' | 'triggered' | 'disabled'
+
+export interface AlertRule {
+  id: number
+  asset_id: number
+  condition: AlertCondition
+  threshold: number
+  status: AlertStatus
+  cooldown_minutes: number | null
+  last_price: number | null
+  last_triggered_at: string | null
+  note: string | null
+  created_at: string
+  updated_at: string
+  symbol: string | null
+  name: string | null
+}
+
+export interface AlertRuleBody {
+  asset_id: number
+  condition: AlertCondition
+  threshold: number
+  note?: string | null
+}
+
 export function getCurrency(): string {
   return localStorage.getItem('plutus_currency') ?? 'USD'
 }
@@ -1017,6 +1045,27 @@ export const api = {
     const qs = params.toString()
     return request<AgentAction[]>(`/agent/actions${qs ? `?${qs}` : ''}`)
   },
+
+  // --- alerts (Phase 7) ---
+  alerts: (params: { asset_id?: number; status?: AlertStatus } = {}) => {
+    const qs = new URLSearchParams()
+    if (params.asset_id !== undefined) qs.set('asset_id', String(params.asset_id))
+    if (params.status) qs.set('status', params.status)
+    const q = qs.toString()
+    return request<AlertRule[]>(`/alerts${q ? `?${q}` : ''}`)
+  },
+  createAlert: (body: AlertRuleBody) =>
+    request<AlertRule>('/alerts', { method: 'POST', body: JSON.stringify(body) }),
+  updateAlert: (
+    id: number,
+    body: {
+      status?: 'armed' | 'disabled'
+      condition?: AlertCondition
+      threshold?: number
+      note?: string | null
+    },
+  ) => request<AlertRule>(`/alerts/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteAlert: (id: number) => request<void>(`/alerts/${id}`, { method: 'DELETE' }),
 }
 
 // --- shared formatting helpers -------------------------------------------------

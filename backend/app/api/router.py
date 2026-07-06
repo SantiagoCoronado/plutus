@@ -5,6 +5,7 @@ from app.api.routes import (
     accounts,
     agent,
     agent_settings,
+    alerts,
     assets,
     backtests,
     bank_investments,
@@ -35,6 +36,7 @@ api_router.include_router(ingestion.router)
 api_router.include_router(agent_settings.router)
 api_router.include_router(agent.router)
 api_router.include_router(translations.router)
+api_router.include_router(alerts.router)
 
 
 @api_router.get("/ping", tags=["meta"])

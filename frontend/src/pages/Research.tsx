@@ -8,6 +8,7 @@ import {
   type IndicatorSeries,
 } from '../api/client'
 import DeepDiveButton from '../components/agent/DeepDiveButton'
+import AlertButton from '../components/research/AlertButton'
 import ChartContainer from '../components/research/ChartContainer'
 import FundamentalsTab from '../components/research/FundamentalsTab'
 import IndicatorPicker from '../components/research/IndicatorPicker'
@@ -96,6 +97,7 @@ export default function Research() {
         </div>
         <div className="flex items-center gap-2">
           <DeepDiveButton assetId={assetId} />
+          <AlertButton assetId={assetId} symbol={asset.symbol} />
           <WatchlistButton assetId={assetId} />
         </div>
       </div>

@@ -11,7 +11,11 @@ from app.llm.tooldefs import EXCLUDED_OPERATIONS, TOOLS, tools_for_tier
 # keywords Gemini's OpenAI-compat endpoint accepts; anything else breaks a provider
 LCD_KEYWORDS = {"type", "properties", "required", "description", "enum", "items"}
 
-# name shapes that would mean a forbidden operation slipped into the registry
+# name shapes that would mean a forbidden operation slipped into the registry.
+# NOTE: delete_alert_rule is intentionally allowed — the spec §13 tool table
+# includes it (deferred with Phase 7 price alerts, never excluded). The delete
+# pattern is anchored to mandate/watchlist and the alert pattern targets
+# alert_channel, so neither matches alert-rule tool names.
 FORBIDDEN_PATTERNS = (
     r"^(update|delete|edit|remove)_(transaction|note)s?$",
     r"^delete_(mandate|watchlist)s?$",
@@ -58,7 +62,7 @@ class TestRegistryInvariants:
             "search_assets", "get_asset_overview", "get_ohlcv", "get_fundamentals",
             "get_news", "run_screen", "backtest_signal", "get_candidates",
             "get_mandates", "get_portfolio_positions", "get_portfolio_performance",
-            "get_ingestion_status",
+            "get_ingestion_status", "list_alert_rules",
         }
         assert expected <= {t.name for t in tools_for_tier("read")}
 
@@ -67,6 +71,8 @@ class TestRegistryInvariants:
             "write_research_note", "manage_watchlist", "create_mandate",
             "update_mandate", "trigger_scan", "update_candidate",
             "run_strategy_backtest", "add_transaction",
+            # Phase 7 price alerts (deferred in Phase 6, now live)
+            "create_alert_rule", "delete_alert_rule",
         }
         write_only = {t.name for t in TOOLS.values() if t.tier == "write"}
         assert expected == write_only

@@ -98,7 +98,7 @@ def clean_state(test_database):
                 "mandates, scans, candidates, notifications, "
                 "accounts, transactions, bank_investments, "
                 "app_settings, agent_conversations, agent_messages, agent_tool_calls, "
-                "strategy_translations "
+                "strategy_translations, alert_rules, exchange_links, exchange_sync_runs "
                 "RESTART IDENTITY CASCADE"
             )
         )

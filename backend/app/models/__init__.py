@@ -11,6 +11,7 @@ from app.models.agent import (
     AgentToolCall,
     AppSetting,
 )
+from app.models.alert_rule import ALERT_CONDITIONS, ALERT_STATUSES, AlertRule
 from app.models.asset import ASSET_CLASSES, Asset
 from app.models.asset_metrics import METRIC_COLUMNS, AssetMetrics
 from app.models.asset_note import AssetNote
@@ -34,6 +35,12 @@ from app.models.discovery import (
     Notification,
     Scan,
 )
+from app.models.exchange import (
+    EXCHANGE_PROVIDERS,
+    EXCHANGE_SYNC_STATUSES,
+    ExchangeLink,
+    ExchangeSyncRun,
+)
 from app.models.fundamentals import FUNDAMENTAL_COLUMNS, Fundamentals
 from app.models.ingestion_run import IngestionRun
 from app.models.news_item import NewsItem
@@ -49,6 +56,8 @@ from app.models.watchlist import DEFAULT_WATCHLIST, Watchlist, WatchlistItem
 
 __all__ = [
     "ACCOUNT_TYPES",
+    "ALERT_CONDITIONS",
+    "ALERT_STATUSES",
     "ASSET_CLASSES",
     "ASSET_TRANSACTION_TYPES",
     "BACKTEST_KINDS",
@@ -60,6 +69,8 @@ __all__ = [
     "CONVERSATION_STATUSES",
     "DAY_COUNTS",
     "DEFAULT_WATCHLIST",
+    "EXCHANGE_PROVIDERS",
+    "EXCHANGE_SYNC_STATUSES",
     "FUNDAMENTAL_COLUMNS",
     "INTERVALS",
     "INVESTMENT_STATUSES",
@@ -78,6 +89,7 @@ __all__ = [
     "AgentConversation",
     "AgentMessage",
     "AgentToolCall",
+    "AlertRule",
     "AppSetting",
     "Asset",
     "AssetMetrics",
@@ -86,6 +98,8 @@ __all__ = [
     "BankInvestment",
     "Base",
     "Candidate",
+    "ExchangeLink",
+    "ExchangeSyncRun",
     "Fundamentals",
     "IngestionRun",
     "Mandate",
