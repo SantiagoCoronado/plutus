@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { api, getToken, setToken, type HealthStatus } from './api/client'
+import AttributionFooter from './components/AttributionFooter'
 import SearchBox from './components/SearchBox'
 
 function HealthBadge() {
@@ -121,13 +122,7 @@ export default function App() {
       <main className="flex-1 p-6">
         <Outlet />
       </main>
-      <footer className="px-6 py-4 text-xs text-zinc-600">
-        Market data by Tiingo, Binance, Twelve Data, FMP, Finnhub — crypto metadata powered by{' '}
-        <a href="https://www.coingecko.com" target="_blank" rel="noopener" className="underline">
-          CoinGecko
-        </a>
-        . Informational only — not financial advice.
-      </footer>
+      <AttributionFooter />
     </div>
   )
 }

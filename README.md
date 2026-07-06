@@ -4,7 +4,7 @@ Self-hosted, single-user investment research, opportunity-discovery, and portfol
 hub for stocks/ETFs, crypto, and forex. **Research and analysis only — no trade execution,
 ever.** Full specification: `investment-hub-spec.md` (kept outside the repo).
 
-**Status: Phase 6 complete** — AI research agent + MCP control plane (of 7 phases).
+**Status: Phase 7 complete** — exchange sync, live quotes, price alerts, backups, hardening (all 7 phases shipped).
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -14,7 +14,7 @@ ever.** Full specification: `investment-hub-spec.md` (kept outside the repo).
 | 4 | Autonomous discovery engine (mandates → scans → ranked inbox + alerts) | ✅ |
 | 5 | Portfolio tracking (transactions, P&L, TWR/IRR, bank investments) + fundamentals signal pack | ✅ |
 | 6 | AI research agent (candidate memos, strategy-from-content translator) + MCP control plane | ✅ |
-| 7 | Exchange sync, live quotes, per-asset price alerts, hardening | — |
+| 7 | Exchange sync (Bitso), live quotes, per-asset price alerts, dashboard, backups, hardening | ✅ |
 
 ## Stack
 
@@ -31,8 +31,8 @@ cp .env.example .env        # set APP_AUTH_TOKEN to something long and random
                             # FMP_API_KEY (fundamentals), FINNHUB_API_KEY (news);
                             # Binance + CoinGecko need no keys
 
-docker compose up --build -d      # db + redis + api + worker + beat
-make seed                         # track AAPL, BTC, EURUSD + SPY/UUP benchmarks
+docker compose up --build -d      # db + redis + api + worker + beat + quotes + backup + agent-sidecar
+make seed                         # track AAPL, BTC, EURUSD + SPY/QQQ/UUP/ETH benchmarks & strip
 make ingest                       # seed + pull daily candles inline (or POST /api/v1/ingestion/run)
 cd backend && uv run python -m app.ingestion.universe   # optional: ~100 large caps + top crypto,
                                   # 5y backfill (paced by rate limits, ~2h; resumable)
@@ -207,6 +207,67 @@ Nightly ingestion runs via Celery Beat at 03:00/03:10/03:20 America/Mexico_City
   summed over every surface; tool loops cap at `AGENT_MAX_TOOL_ITERATIONS` (15);
   tool outputs are size-clipped; scheduled tasks skip-and-log when the budget is
   spent. The app is fully usable with the AI layer unconfigured.
+
+## Live quotes, price alerts & exchange sync (Phase 7)
+
+- **Live quotes** (`/ws/quotes`): the `quotes` compose service is a persistent
+  streamer — Binance's public websocket for crypto plus a market-hours-gated poller
+  for stocks/forex — fanned out to the browser over one websocket via Redis pub/sub.
+  The dashboard market strip, watchlist, and heatmap tick live; when no live quote is
+  available the UI falls back to the latest daily close. Intraday prices live in Redis
+  only and never touch the `ohlcv` hypertable.
+- **Price alerts** (bell icon on any asset, or via the agent): per-asset above/below
+  threshold rules. A minute-cadence evaluator fires on an actual **crossing** (not a
+  level), delivers once through the same email/Telegram channels as discovery alerts
+  (`notifications` kind `price_alert`), then disarms — one-shot with explicit re-arm,
+  so a flapping price can't spam you.
+- **Exchange sync — Bitso, read-only** (Settings → connect, then "Sync now" on the
+  exchange account): pulls your real trades, fundings, and withdrawals into the ledger,
+  resuming from a saved cursor and deduping via `external_id` so re-syncs create zero
+  duplicates. The client is **structurally GET-only** (no order/trade endpoints exist in
+  the code) — research and analysis only, never execution. Keys are entered in Settings
+  and Fernet-encrypted at rest; a nightly beat job re-syncs linked accounts.
+- **Dashboard** (spec §9.1): live market strip, four metric cards (value, today's P&L,
+  YTD TWR vs SPY, new candidates), an ECharts red→green heatmap treemap
+  (portfolio / watchlist / market × 1D/1W/1M/YTD), the research inbox preview, watchlist,
+  allocation donut, latest AI brief, and a status footer with ingestion health, last scan,
+  and armed-alert count.
+- **Ingestion health** (Settings + dashboard footer): per-provider last-success,
+  staleness vs expected cadence, and daily/monthly budget usage rolled up to a
+  green/amber/red status.
+
+## Backups
+
+The `backup` compose service takes a nightly **`pg_dump` at 04:00 local** (container
+`TZ`, default `America/Mexico_City`) into the `backups` Docker volume, keeping **14 days**
+of history. It runs the **same `timescale/timescaledb:2.28.2-pg16` image as the database**,
+so pg_dump's version and TimescaleDB extension exactly match the server — a hard
+requirement for a clean restore. Dumps are custom-format (`-Fc`) and written via a
+`.tmp` + atomic-rename, so an interrupted dump never leaves a partial `plutus_*.dump`.
+
+```sh
+make backup-now     # take a dump right now (stack must be up)
+make backup-list    # list dumps in the backups volume
+```
+
+**Restore.** TimescaleDB needs a pre/post-restore dance, and the restore must use the
+same timescaledb image/version the dump was taken with. `make restore` verifies a dump
+by restoring it into a throwaway `plutus_restore_check` database — the live `plutus`
+database is never touched:
+
+```sh
+make restore FILE=plutus_20260706_0400.dump
+```
+
+Under the hood (and the manual procedure for a real in-place restore into `plutus`,
+after stopping `app`/`worker`/`beat`/`quotes`):
+
+```sql
+CREATE EXTENSION IF NOT EXISTS timescaledb;   -- into the fresh, empty target db
+SELECT timescaledb_pre_restore();
+-- (shell) pg_restore -Fc -d <db> <file>
+SELECT timescaledb_post_restore();
+```
 
 ## Notes & deliberate decisions
 

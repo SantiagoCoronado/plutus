@@ -102,6 +102,29 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # nightly database backup sidecar (Phase 7 M7). Uses the SAME image as `db` so
+  # pg_dump's version and TimescaleDB extension awareness match the server — a
+  # requirement for the timescaledb_pre_restore()/post_restore() restore dance
+  # (plain postgres would mismatch). The custom entrypoint replaces the postgres
+  # server; `command: []` clears the image's default CMD ("postgres") so it is
+  # never passed to the script as an argument.
+  backup:
+    image: timescale/timescaledb:2.28.2-pg16
+    entrypoint: ["/bin/sh", "/backup.sh"]
+    command: []
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-plutus}
+      POSTGRES_USER: plutus
+      POSTGRES_DB: plutus
+      TZ: ${TZ:-America/Mexico_City}
+    volumes:
+      - ./scripts/backup.sh:/backup.sh:ro
+      - backups:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
   # claude-subscription LLM provider (spec §13.1): wraps the claude agent SDK on
   # the user's Claude plan. Deliberately NOT a dependency of anything — if it's
   # down, only the claude-subscription option in Settings degrades.
@@ -130,3 +153,4 @@ services:
 volumes:
   pgdata:
   artifacts:
+  backups:
