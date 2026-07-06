@@ -826,6 +826,38 @@ export interface BitsoTestResult {
   error?: string | null
 }
 
+// --- ingestion health (Phase 7) ---
+
+export type HealthLight = 'green' | 'amber' | 'red'
+
+export interface IngestionJobHealth {
+  job_name: string
+  provider: string | null
+  asset_class: string | null
+  last_status: string | null
+  last_run_at: string | null
+  last_success_at: string | null
+  staleness: HealthLight
+  rows_written: number | null
+  symbols_ok: number | null
+  symbols_failed: number | null
+  note: string | null
+}
+
+export interface ProviderBudget {
+  provider: string
+  window: 'day' | 'month'
+  used: number
+  budget: number
+  pct: number
+}
+
+export interface IngestionHealth {
+  status: HealthLight
+  jobs: IngestionJobHealth[]
+  budgets: ProviderBudget[]
+}
+
 export function getCurrency(): string {
   return localStorage.getItem('plutus_currency') ?? 'USD'
 }
@@ -1111,6 +1143,9 @@ export const api = {
     request<{ task_id: string; status: string }>(`/exchanges/${accountId}/sync`, {
       method: 'POST',
     }),
+
+  // --- ingestion health (Phase 7) ---
+  ingestionHealth: () => request<IngestionHealth>('/health/ingestion'),
 }
 
 // --- shared formatting helpers -------------------------------------------------

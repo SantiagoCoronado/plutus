@@ -11,6 +11,7 @@ from app.api.routes import (
     bank_investments,
     candidates,
     exchanges,
+    health,
     ingestion,
     mandates,
     portfolio,
@@ -39,6 +40,7 @@ api_router.include_router(agent.router)
 api_router.include_router(translations.router)
 api_router.include_router(alerts.router)
 api_router.include_router(exchanges.router)
+api_router.include_router(health.router)
 
 
 @api_router.get("/ping", tags=["meta"])
