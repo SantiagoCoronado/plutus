@@ -125,3 +125,20 @@ def run_nightly_research_memos() -> list[int]:
     from app.llm.research import run_nightly_memos
 
     return run_nightly_memos()
+
+
+@celery_app.task(name="worker.tasks.sync_exchange", time_limit=600, soft_time_limit=570)
+def sync_exchange(account_id: int) -> int:
+    """Read-only Bitso sync for one exchange account; returns exchange_sync_runs.id."""
+    from app.core.db import SessionLocal
+    from app.exchanges.sync import sync_bitso_account
+
+    return sync_bitso_account(SessionLocal, account_id)
+
+
+@celery_app.task(name="worker.tasks.sync_exchange_nightly")
+def sync_exchange_nightly() -> list[int]:
+    """Nightly beat: sync every bitso-linked exchange account (skips if no keys)."""
+    from app.exchanges.sync import sync_all_bitso_accounts
+
+    return sync_all_bitso_accounts()

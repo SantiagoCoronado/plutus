@@ -794,6 +794,38 @@ export interface AlertRuleBody {
   note?: string | null
 }
 
+// --- exchanges (Phase 7) ---
+
+export interface ExchangeRun {
+  status: string
+  trades_created: number
+  trades_skipped: number
+  finished_at: string | null
+  details: Record<string, unknown> | null
+}
+
+export interface ExchangeAccountStatus {
+  account_id: number
+  name: string
+  provider: string | null
+  last_synced_at: string | null
+  last_status: string | null
+  last_run: ExchangeRun | null
+}
+
+export interface ExchangeStatus {
+  configured: boolean
+  keys: Record<string, string | null>
+  fernet_ready: boolean
+  accounts: ExchangeAccountStatus[]
+}
+
+export interface BitsoTestResult {
+  ok: boolean
+  currencies?: number | null
+  error?: string | null
+}
+
 export function getCurrency(): string {
   return localStorage.getItem('plutus_currency') ?? 'USD'
 }
@@ -1066,6 +1098,19 @@ export const api = {
     },
   ) => request<AlertRule>(`/alerts/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteAlert: (id: number) => request<void>(`/alerts/${id}`, { method: 'DELETE' }),
+
+  // --- exchanges (Phase 7) ---
+  exchangesStatus: () => request<ExchangeStatus>('/exchanges/status'),
+  putBitsoKeys: (body: { api_key?: string; api_secret?: string }) =>
+    request<ExchangeStatus>('/exchanges/bitso/keys', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  testBitso: () => request<BitsoTestResult>('/exchanges/bitso/test', { method: 'POST' }),
+  syncExchangeAccount: (accountId: number) =>
+    request<{ task_id: string; status: string }>(`/exchanges/${accountId}/sync`, {
+      method: 'POST',
+    }),
 }
 
 // --- shared formatting helpers -------------------------------------------------

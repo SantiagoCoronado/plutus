@@ -77,4 +77,9 @@ celery_app.conf.beat_schedule = {
         "task": "worker.tasks.run_nightly_research_memos",
         "schedule": crontab(hour=8, minute=15),
     },
+    # read-only Bitso pull, after the EOD ingestion jobs (03:00–03:20)
+    "sync-bitso": {
+        "task": "worker.tasks.sync_exchange_nightly",
+        "schedule": crontab(hour=3, minute=40),
+    },
 }

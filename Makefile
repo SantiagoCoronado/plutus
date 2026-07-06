@@ -1,4 +1,6 @@
-.PHONY: infra infra-down api worker beat seed ingest test test-integration lint up down logs
+.PHONY: infra infra-down api worker beat seed ingest test test-integration lint up down logs guard-tasa
+
+GUARD_DIRS := backend/app backend/worker frontend/src sidecar scripts
 
 # --- Native dev (fast iteration): db+redis in Docker, backend/frontend on host ---
 infra:            ## start db + redis only
@@ -33,6 +35,17 @@ test-integration: ## integration tests (needs `make infra` first)
 
 lint:
 	cd backend && uv run ruff check .
+
+# read-only guarantee: the forbidden trading string must appear nowhere in source
+# (-I skips binaries; node_modules holds vendored deps we don't own)
+guard-tasa:       ## fail if the forbidden string leaks into source
+	@dirs="$(foreach d,$(GUARD_DIRS),$(wildcard $(d)))"; \
+	if grep -riI --exclude-dir=node_modules tasa $$dirs >/dev/null 2>&1; then \
+		echo "guard-tasa: forbidden string found:"; \
+		grep -rniI --exclude-dir=node_modules tasa $$dirs; exit 1; \
+	else \
+		echo "guard-tasa: clean"; \
+	fi
 
 # --- Full stack ---
 up:               ## build + start the full compose stack

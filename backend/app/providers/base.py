@@ -68,6 +68,7 @@ class RateLimit:
 #   binance:     6000 weight/min, klines cost 2 — 300 req/min is ~10% utilization, keyless
 #   fmp:         250 req/day (no published per-minute figure; 8/min is polite)
 #   edgar:       SEC cap 10 req/s, keyless (mandatory User-Agent with contact email)
+#   bitso:       private endpoints 60 req/min — 55/min stays under with headroom
 PROVIDER_LIMITS: dict[str, RateLimit] = {
     "tiingo": RateLimit(capacity=45, refill_amount=45, refill_period_s=3600, day_budget=900),
     "coingecko": RateLimit(capacity=25, refill_amount=25, refill_period_s=60, month_budget=9000),
@@ -77,6 +78,7 @@ PROVIDER_LIMITS: dict[str, RateLimit] = {
     "binance": RateLimit(capacity=300, refill_amount=300, refill_period_s=60),
     "fmp": RateLimit(capacity=8, refill_amount=8, refill_period_s=60, day_budget=225),
     "edgar": RateLimit(capacity=8, refill_amount=8, refill_period_s=1),
+    "bitso": RateLimit(capacity=55, refill_amount=55, refill_period_s=60),
 }
 
 # Response-cache TTLs per data type (spec §3)

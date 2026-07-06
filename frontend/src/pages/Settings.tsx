@@ -10,6 +10,7 @@ import {
   type TestConnectionResult,
 } from '../api/client'
 import { ErrorList, Field, inputClass, buttonClass, parseServerErrors, type ServerError } from '../components/portfolio/shared'
+import BitsoSection from '../components/settings/BitsoSection'
 
 const PROVIDERS: { value: LLMProviderName; label: string; hint: string }[] = [
   {
@@ -270,6 +271,8 @@ export default function Settings() {
           </div>
         )}
       </section>
+
+      <BitsoSection />
     </div>
   )
 }

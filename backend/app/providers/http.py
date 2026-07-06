@@ -100,11 +100,15 @@ class RateLimitedClient:
         acquire_timeout: float = 120.0,
         cache_key_exclude: tuple[str, ...] = ("token", "apikey", "api_key"),
         tolerate_statuses: tuple[int, ...] = (),
+        headers: dict[str, str] | None = None,
     ) -> Any:
         """GET path, honoring cache, budgets, token bucket, and retry/backoff.
 
         `tolerate_statuses`: error codes whose JSON body the caller interprets itself
         (e.g. Twelve Data answers 400 with a semantic error payload). Never cached.
+        `headers`: per-request headers (e.g. a signed Authorization). Signed callers
+        embed their query string in `path` and pass no params, so the request line
+        matches exactly what they signed.
         """
         params = params or {}
         cache_key = self._cache_key(path, params, cache_key_exclude)
@@ -116,7 +120,9 @@ class RateLimitedClient:
 
         self._check_budget()
         self._acquire_token(acquire_timeout)
-        payload, tolerated = self._request_with_backoff(path, params, tolerate_statuses)
+        payload, tolerated = self._request_with_backoff(
+            path, params, tolerate_statuses, headers
+        )
 
         if cache_ttl and not tolerated:
             self._redis.setex(cache_key, cache_ttl, json.dumps(payload))
@@ -167,12 +173,16 @@ class RateLimitedClient:
             self._sleep(min(wait, 5.0))
 
     def _request_with_backoff(
-        self, path: str, params: dict[str, Any], tolerate_statuses: tuple[int, ...] = ()
+        self,
+        path: str,
+        params: dict[str, Any],
+        tolerate_statuses: tuple[int, ...] = (),
+        headers: dict[str, str] | None = None,
     ) -> tuple[Any, bool]:
         last_error: str = ""
         for attempt in range(MAX_ATTEMPTS):
             try:
-                resp = self._client.get(path, params=params)
+                resp = self._client.get(path, params=params or None, headers=headers)
             except httpx.HTTPError as exc:  # network/timeout: retryable
                 last_error = f"transport error: {exc}"
                 self._sleep(self._backoff_delay(attempt, None))
