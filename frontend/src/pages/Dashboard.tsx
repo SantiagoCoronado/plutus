@@ -1,12 +1,65 @@
+import { useEffect, useState } from 'react'
+import { api, getCurrency, type Dashboard as DashboardData } from '../api/client'
+import DailyBriefCard from '../components/dashboard/DailyBriefCard'
+import HeatmapTreemap from '../components/dashboard/HeatmapTreemap'
+import InboxPreview from '../components/dashboard/InboxPreview'
+import MarketStrip from '../components/dashboard/MarketStrip'
+import MetricCards from '../components/dashboard/MetricCards'
+import StatusFooter from '../components/dashboard/StatusFooter'
+import WatchlistPanel from '../components/dashboard/WatchlistPanel'
+import AllocationDonut from '../components/portfolio/AllocationDonut'
+import CurrencyToggle from '../components/portfolio/CurrencyToggle'
+
 export default function Dashboard() {
+  const [currency, setCurrency] = useState(getCurrency())
+  const [data, setData] = useState<DashboardData | null>(null)
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    setFailed(false)
+    api
+      .dashboard(currency)
+      .then(setData)
+      .catch(() => setFailed(true))
+  }, [currency])
+
+  if (failed) {
+    return <p className="text-sm text-zinc-500">Couldn't load the dashboard.</p>
+  }
+  if (!data) {
+    return <p className="text-sm text-zinc-500">Loading…</p>
+  }
+
   return (
-    <div className="rounded-lg border border-dashed border-zinc-800 p-10 text-center">
-      <h2 className="mb-2 text-xl font-medium text-zinc-300">Dashboard</h2>
-      <p className="text-sm text-zinc-500">
-        Use the search bar to open any tracked asset's research page (charts, indicators,
-        fundamentals, news, notes). The dashboard widgets — market strip, portfolio cards,
-        heatmap treemap, opportunity inbox — arrive with Phases 3–5.
-      </p>
+    <div className="mx-auto max-w-6xl space-y-4">
+      <div className="flex items-center justify-between">
+        <h1 className="text-lg font-semibold">Dashboard</h1>
+        <CurrencyToggle currency={currency} onChange={setCurrency} />
+      </div>
+
+      <MarketStrip entries={data.market_strip} />
+
+      <MetricCards data={data} />
+
+      <HeatmapTreemap currency={currency} />
+
+      <div className="grid gap-4 lg:grid-cols-5">
+        <div className="lg:col-span-3">
+          <InboxPreview candidates={data.candidates.top} />
+        </div>
+        <div className="space-y-4 lg:col-span-2">
+          <WatchlistPanel />
+          <AllocationDonut currency={currency} refreshKey={0} />
+        </div>
+      </div>
+
+      <DailyBriefCard brief={data.agent_brief} />
+
+      <StatusFooter
+        lastScanAt={data.last_scan_at}
+        ingestionStatus={data.ingestion_status}
+        armedAlerts={data.armed_alerts}
+      />
     </div>
   )
 }

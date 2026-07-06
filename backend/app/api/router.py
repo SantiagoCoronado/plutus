@@ -10,6 +10,7 @@ from app.api.routes import (
     backtests,
     bank_investments,
     candidates,
+    dashboard,
     exchanges,
     health,
     ingestion,
@@ -34,6 +35,7 @@ api_router.include_router(accounts.router)
 api_router.include_router(transactions.router)
 api_router.include_router(bank_investments.router)
 api_router.include_router(portfolio.router)
+api_router.include_router(dashboard.router)
 api_router.include_router(ingestion.router)
 api_router.include_router(agent_settings.router)
 api_router.include_router(agent.router)

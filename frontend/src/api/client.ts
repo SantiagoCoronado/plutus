@@ -858,6 +858,86 @@ export interface IngestionHealth {
   budgets: ProviderBudget[]
 }
 
+// --- dashboard (Phase 7) ---
+
+export interface DashboardPortfolio {
+  value: number | null
+  currency: string
+  day_pnl: number | null
+  day_pnl_pct: number | null // fraction (fmtPct)
+  series_30d: { date: string; value: number }[]
+}
+
+export interface DashboardYtd {
+  twr_pct: number | null // fraction
+  benchmark_symbol: string
+  benchmark_return_pct: number | null // fraction
+}
+
+export interface DashboardCandidate {
+  id: number
+  asset_id: number
+  symbol: string
+  name: string | null
+  asset_class: AssetClass
+  mandate_name: string
+  score: number
+  status: CandidateStatus
+  signals_summary: string[]
+}
+
+export interface DashboardCandidates {
+  new_count: number
+  top: DashboardCandidate[]
+}
+
+export interface AgentBrief {
+  subject: string
+  body: string | null
+  sent_at: string
+  meta: Record<string, unknown>
+}
+
+export interface MarketStripEntry {
+  label: string
+  symbol: string
+  asset_class: string
+}
+
+export interface Dashboard {
+  portfolio: DashboardPortfolio
+  ytd: DashboardYtd
+  candidates: DashboardCandidates
+  last_scan_at: string | null
+  agent_brief: AgentBrief | null
+  ingestion_status: HealthLight
+  armed_alerts: number
+  market_strip: MarketStripEntry[]
+}
+
+export type HeatmapMode = 'portfolio' | 'watchlist' | 'market'
+export type HeatmapTimeframe = '1D' | '1W' | '1M' | 'YTD'
+
+export interface HeatmapTile {
+  symbol: string
+  asset_id: number
+  name: string | null
+  asset_class: AssetClass
+  sector: string | null
+  size: number
+  change_pct: number // PERCENT (1.23 = +1.23%), matches the WS tick's change_pct
+  price: number | null
+  weight_pct: number | null
+  pnl: number | null
+}
+
+export interface HeatmapResponse {
+  mode: HeatmapMode
+  timeframe: HeatmapTimeframe
+  currency: string
+  tiles: HeatmapTile[]
+}
+
 export function getCurrency(): string {
   return localStorage.getItem('plutus_currency') ?? 'USD'
 }
@@ -1146,6 +1226,13 @@ export const api = {
 
   // --- ingestion health (Phase 7) ---
   ingestionHealth: () => request<IngestionHealth>('/health/ingestion'),
+
+  // --- dashboard (Phase 7) ---
+  dashboard: (currency: string) => request<Dashboard>(`/dashboard?currency=${currency}`),
+  dashboardHeatmap: (mode: HeatmapMode, timeframe: HeatmapTimeframe, currency: string) =>
+    request<HeatmapResponse>(
+      `/dashboard/heatmap?mode=${mode}&timeframe=${timeframe}&currency=${currency}`,
+    ),
 }
 
 // --- shared formatting helpers -------------------------------------------------
