@@ -39,3 +39,18 @@ async def read_last_quotes(redis, symbols: Iterable[str]) -> dict[str, dict]:
         if raw is not None:
             out[symbol.upper()] = json.loads(raw)
     return out
+
+
+def read_last_quotes_sync(redis, symbols: Iterable[str]) -> dict[str, dict]:
+    """Synchronous twin of read_last_quotes for the Celery worker (sync redis
+    client). Same key shape and skip-missing behavior; used by the alert
+    evaluator, which runs as a per-minute beat task like every other job."""
+    symbols = [s for s in symbols]
+    if not symbols:
+        return {}
+    values = redis.mget([_last_key(s) for s in symbols])
+    out: dict[str, dict] = {}
+    for symbol, raw in zip(symbols, values, strict=True):
+        if raw is not None:
+            out[symbol.upper()] = json.loads(raw)
+    return out

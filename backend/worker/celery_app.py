@@ -82,4 +82,9 @@ celery_app.conf.beat_schedule = {
         "task": "worker.tasks.sync_exchange_nightly",
         "schedule": crontab(hour=3, minute=40),
     },
+    # fire armed price alerts on a threshold crossing — reads the live quote cache
+    "evaluate-price-alerts": {
+        "task": "worker.tasks.evaluate_price_alerts",
+        "schedule": crontab(minute="*"),
+    },
 }

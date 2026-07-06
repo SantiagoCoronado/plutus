@@ -127,6 +127,20 @@ def run_nightly_research_memos() -> list[int]:
     return run_nightly_memos()
 
 
+@celery_app.task(
+    name="worker.tasks.evaluate_price_alerts", time_limit=120, soft_time_limit=100
+)
+def evaluate_price_alerts() -> dict:
+    """Per-minute beat: fire any armed price alert whose live quote just crossed
+    its threshold. Reads quote:last:* — keeps the streamer pure and the DB writes
+    + delivery in the worker."""
+    from app.alerts.evaluate import evaluate_alerts
+    from app.core.db import session_scope
+
+    with session_scope() as session:
+        return evaluate_alerts(session)
+
+
 @celery_app.task(name="worker.tasks.sync_exchange", time_limit=600, soft_time_limit=570)
 def sync_exchange(account_id: int) -> int:
     """Read-only Bitso sync for one exchange account; returns exchange_sync_runs.id."""
