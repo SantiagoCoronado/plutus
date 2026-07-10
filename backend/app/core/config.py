@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     # remind this many days before a fixed-term bank investment matures (spec §7.4)
     maturity_reminder_days: int = 7
 
+    # an fx close older than this converts with a stale warning instead of silently
+    fx_max_stale_days: int = 7
+
     # --- AI agent layer (spec §13) — env values are the seed; app_settings rows
     # (Settings UI) override them so the provider can switch without a restart.
     llm_provider: str = "claude-subscription"

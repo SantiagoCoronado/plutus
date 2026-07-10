@@ -25,21 +25,30 @@ SUPPORTED_CURRENCIES = ("USD", "MXN", "EUR")
 
 def fx_rate(session: Session, from_ccy: str, to_ccy: str, as_of: date) -> float | None:
     """Most recent conversion rate on or before `as_of` (1 from_ccy = X to_ccy)."""
+    return fx_rate_with_age(session, from_ccy, to_ccy, as_of)[0]
+
+
+def fx_rate_with_age(
+    session: Session, from_ccy: str, to_ccy: str, as_of: date
+) -> tuple[float | None, date | None]:
+    """Like fx_rate, but also returns the close date the rate came from so
+    callers can flag stale conversions. Triangulated rates report the OLDER leg
+    — the staleness of a composite is bounded by its weakest link."""
     if from_ccy == to_ccy:
-        return 1.0
+        return 1.0, as_of
     direct = _latest_close(session, f"{from_ccy}{to_ccy}", as_of)
     if direct is not None:
         return direct
     inverse = _latest_close(session, f"{to_ccy}{from_ccy}", as_of)
-    if inverse is not None and inverse != 0:
-        return 1.0 / inverse
+    if inverse is not None and inverse[0] != 0:
+        return 1.0 / inverse[0], inverse[1]
     # triangulate through USD: EUR→MXN = EURUSD · USDMXN
     if "USD" not in (from_ccy, to_ccy):
-        leg_a = fx_rate(session, from_ccy, "USD", as_of)
-        leg_b = fx_rate(session, "USD", to_ccy, as_of)
+        leg_a, date_a = fx_rate_with_age(session, from_ccy, "USD", as_of)
+        leg_b, date_b = fx_rate_with_age(session, "USD", to_ccy, as_of)
         if leg_a is not None and leg_b is not None:
-            return leg_a * leg_b
-    return None
+            return leg_a * leg_b, min(d for d in (date_a, date_b) if d is not None)
+    return None, None
 
 
 def fx_series(
@@ -78,12 +87,12 @@ def _forex_asset_id(session: Session, symbol: str) -> int | None:
     ).scalar_one_or_none()
 
 
-def _latest_close(session: Session, symbol: str, as_of: date) -> float | None:
+def _latest_close(session: Session, symbol: str, as_of: date) -> tuple[float, date] | None:
     asset_id = _forex_asset_id(session, symbol)
     if asset_id is None:
         return None
-    return session.execute(
-        select(Ohlcv.close)
+    row = session.execute(
+        select(Ohlcv.close, Ohlcv.ts)
         .where(
             Ohlcv.asset_id == asset_id,
             Ohlcv.interval == "1d",
@@ -91,7 +100,10 @@ def _latest_close(session: Session, symbol: str, as_of: date) -> float | None:
         )
         .order_by(Ohlcv.ts.desc())
         .limit(1)
-    ).scalar_one_or_none()
+    ).first()
+    if row is None:
+        return None
+    return row.close, row.ts.date()
 
 
 def _close_series(

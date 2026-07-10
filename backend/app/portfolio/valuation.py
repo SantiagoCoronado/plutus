@@ -16,9 +16,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models import Account, Asset, BankInvestment, Ohlcv, Transaction
+from app.models import Account, Asset, BankInvestment, BankInvestmentTerm, Ohlcv, Transaction
 from app.portfolio import fx as fx_mod
-from app.portfolio.interest import Terms, current_value, daily_value_series
+from app.portfolio.interest import Terms, current_value, history_value_series
 from app.portfolio.lots import TxnRow, average_cost, build_lots
 from app.portfolio.performance import (
     ACCOUNT_FLOW_TYPES,
@@ -105,7 +105,11 @@ def compute_positions(
     realized_by_key: dict[tuple[int, int], float] = {}
     realized_total = 0.0
     for sale in state.realized:
-        converted = sale.realized_pnl * rates.get(sale.currency, currency)
+        # realized P&L converts at the SALE-DATE rate — historical gains must not
+        # drift with today's fx (unrealized figures still use the as_of rate)
+        converted = sale.realized_pnl * rates.get(
+            sale.currency, currency, on=min(sale.ts.date(), as_of)
+        )
         realized_by_key[(sale.account_id, sale.asset_id)] = (
             realized_by_key.get((sale.account_id, sale.asset_id), 0.0) + converted
         )
@@ -264,9 +268,13 @@ def portfolio_value_series(
         rates = fx_mod.fx_series(session, cash_ccy, currency, start, end)
         value = value.add((amounts * rates).fillna(0.0))
 
-    # bank investments accrue daily
-    for investment in _load_investments(session, account_id):
-        series = daily_value_series(_terms(investment), start, end)
+    # bank investments accrue daily; walking the term history keeps the series
+    # continuous across auto-renewals (capitalized interest is return, not flow)
+    investments = _load_investments(session, account_id)
+    term_rows = _load_term_rows(session, [investment.id for investment in investments])
+    for investment in investments:
+        history = _term_history(investment, term_rows.get(investment.id, []))
+        series = history_value_series(history, start, end)
         rates = fx_mod.fx_series(session, investment.currency, currency, start, end)
         value = value.add((series * rates).fillna(0.0))
 
@@ -274,6 +282,15 @@ def portfolio_value_series(
     flow_types = EXTERNAL_FLOW_TYPES if account_id is None else ACCOUNT_FLOW_TYPES
     flows = pd.Series(0.0, index=grid)
     fx_flow_cache: dict[str, pd.Series] = {}
+    transfer_closes: dict[int, pd.Series | None] = {}
+    transfer_ccy: dict[int, str] = {}
+
+    def flow_rate(ccy: str, day: pd.Timestamp) -> float:
+        if ccy not in fx_flow_cache:
+            fx_flow_cache[ccy] = fx_mod.fx_series(session, ccy, currency, start, end)
+        rate = fx_flow_cache[ccy].get(day)
+        return 1.0 if rate is None or rate != rate else rate
+
     for txn in txns:
         sign = flow_types.get(txn.type)
         if sign is None:
@@ -281,14 +298,28 @@ def portfolio_value_series(
         day = pd.Timestamp(txn.ts.date())
         if day < grid[0] or day > grid[-1]:
             continue
-        if txn.currency not in fx_flow_cache:
-            fx_flow_cache[txn.currency] = fx_mod.fx_series(
-                session, txn.currency, currency, start, end
-            )
-        rate = fx_flow_cache[txn.currency].get(day)
-        rate = 1.0 if rate is None or rate != rate else rate
-        amount = txn.quantity if txn.type in ("deposit", "withdrawal") else _transfer_value(txn)
-        flows.loc[day] += sign * amount * rate
+        if txn.type in ("deposit", "withdrawal"):
+            flows.loc[day] += sign * txn.quantity * flow_rate(txn.currency, day)
+            continue
+        # transfers: carried cost when the row has one; exchange-synced crypto
+        # transfers carry price=None and are marked to market on the flow day —
+        # a zero-valued flow would book the moved asset as a fake gain/loss
+        if txn.price is not None:
+            flows.loc[day] += sign * txn.quantity * txn.price * flow_rate(txn.currency, day)
+            continue
+        if txn.asset_id is None:
+            continue
+        if txn.asset_id not in transfer_closes:
+            transfer_closes[txn.asset_id] = _close_grid(session, txn.asset_id, grid)
+            asset = session.get(Asset, txn.asset_id)
+            transfer_ccy[txn.asset_id] = asset.currency if asset else "USD"
+        closes = transfer_closes[txn.asset_id]
+        close = closes.get(day) if closes is not None else None
+        if close is None or close != close:
+            continue
+        flows.loc[day] += (
+            sign * txn.quantity * float(close) * flow_rate(transfer_ccy[txn.asset_id], day)
+        )
 
     return pd.DataFrame({"value": value, "flow": flows})
 
@@ -402,30 +433,54 @@ def allocation(session: Session, *, as_of: date, currency: str, by: str) -> dict
 
 
 class _RateCache:
-    """Point-in-time fx lookups; a missing pair warns once and falls back to 1."""
+    """Point-in-time fx lookups. A missing pair warns and falls back to 1; a rate
+    older than FX_MAX_STALE_DAYS still converts but carries a stale warning —
+    neither case is ever a silent 1.0 blend. Warnings are machine-readable
+    ({code, from_currency, to_currency, warning}) and deduped per pair."""
 
     def __init__(self, session: Session, as_of: date, warnings: list[dict]):
         self._session = session
         self._as_of = as_of
         self._warnings = warnings
-        self._cache: dict[tuple[str, str], float | None] = {}
+        self._max_stale_days = get_settings().fx_max_stale_days
+        self._cache: dict[tuple[str, str, date], float | None] = {}
+        self._warned: set[tuple[str, str, str]] = set()
 
-    def get(self, from_ccy: str, to_ccy: str) -> float:
-        key = (from_ccy, to_ccy)
+    def get(self, from_ccy: str, to_ccy: str, on: date | None = None) -> float:
+        as_of = on or self._as_of
+        key = (from_ccy, to_ccy, as_of)
         if key not in self._cache:
-            rate = fx_mod.fx_rate(self._session, from_ccy, to_ccy, self._as_of)
-            if rate is None and from_ccy != to_ccy:
-                self._warnings.append(
-                    {
-                        "warning": (
-                            f"no {from_ccy}->{to_ccy} rate on record; "
-                            f"{from_ccy} amounts are unconverted"
-                        )
-                    }
-                )
+            rate, rate_date = fx_mod.fx_rate_with_age(self._session, from_ccy, to_ccy, as_of)
+            if from_ccy != to_ccy:
+                if rate is None:
+                    self._warn(
+                        "fx_missing", from_ccy, to_ccy,
+                        f"no {from_ccy}->{to_ccy} rate on record; "
+                        f"{from_ccy} amounts are unconverted",
+                    )
+                elif rate_date is not None and (as_of - rate_date).days > self._max_stale_days:
+                    self._warn(
+                        "fx_stale", from_ccy, to_ccy,
+                        f"latest {from_ccy}->{to_ccy} rate is from {rate_date.isoformat()} "
+                        f"({(as_of - rate_date).days} days before {as_of.isoformat()})",
+                    )
             self._cache[key] = rate
         rate = self._cache[key]
         return rate if rate is not None else 1.0
+
+    def _warn(self, code: str, from_ccy: str, to_ccy: str, message: str) -> None:
+        dedup = (code, from_ccy, to_ccy)
+        if dedup in self._warned:
+            return
+        self._warned.add(dedup)
+        self._warnings.append(
+            {
+                "code": code,
+                "from_currency": from_ccy,
+                "to_currency": to_ccy,
+                "warning": message,
+            }
+        )
 
 
 def _load_txns(session: Session, account_id: int | None) -> list[TxnRow]:
@@ -454,6 +509,48 @@ def _terms(investment: BankInvestment) -> Terms:
         start_date=investment.start_date,
         maturity_date=investment.maturity_date,
     )
+
+
+def _load_term_rows(
+    session: Session, investment_ids: list[int]
+) -> dict[int, list[BankInvestmentTerm]]:
+    """Append-only term history per investment id, oldest first."""
+    if not investment_ids:
+        return {}
+    rows: dict[int, list[BankInvestmentTerm]] = {}
+    for row in session.scalars(
+        select(BankInvestmentTerm)
+        .where(BankInvestmentTerm.investment_id.in_(investment_ids))
+        .order_by(BankInvestmentTerm.investment_id, BankInvestmentTerm.start_date)
+    ).all():
+        rows.setdefault(row.investment_id, []).append(row)
+    return rows
+
+
+def _term_history(
+    investment: BankInvestment, term_rows: Sequence[BankInvestmentTerm]
+) -> list[Terms]:
+    """One Terms per historical term. An investment with no rows (never rolled
+    over, or created before the history table existed) is exactly the single
+    term its parent row describes — legacy data needs no migration."""
+    if not term_rows:
+        return [_terms(investment)]
+    return [
+        Terms(
+            kind=investment.kind,
+            principal=float(row.principal),
+            annual_rate=float(row.annual_rate),
+            rate_tiers=row.rate_tiers,
+            cap_amount=float(row.cap_amount) if row.cap_amount is not None else None,
+            day_count=investment.day_count,
+            compounding=investment.compounding,
+            start_date=row.start_date,
+            # a closed term freezes at its capitalization date; the open term
+            # follows the parent's live maturity clamp
+            maturity_date=row.end_date if row.end_date is not None else investment.maturity_date,
+        )
+        for row in term_rows
+    ]
 
 
 def _latest_closes(session: Session, asset_ids: list[int], as_of: date) -> dict[int, float]:
@@ -526,11 +623,6 @@ def _close_grid(
     return fx_mod.align_to_grid(closes, grid)
 
 
-def _transfer_value(txn: TxnRow) -> float:
-    """A transfer's flow value is its carried cost (quantity × price)."""
-    return txn.quantity * (txn.price if txn.price is not None else 0.0)
-
-
 def _period_start(
     session: Session, period: str, today: date, account_id: int | None
 ) -> date:
@@ -549,6 +641,16 @@ def _period_start(
     if account_id is not None:
         inv_query = inv_query.where(BankInvestment.account_id == account_id)
     candidates.append(session.scalar(inv_query))
+    # a renewed investment's parent start_date moved forward; its inception
+    # survives in the first term-history row
+    term_query = (
+        select(BankInvestmentTerm.start_date).order_by(BankInvestmentTerm.start_date).limit(1)
+    )
+    if account_id is not None:
+        term_query = term_query.join(
+            BankInvestment, BankInvestment.id == BankInvestmentTerm.investment_id
+        ).where(BankInvestment.account_id == account_id)
+    candidates.append(session.scalar(term_query))
     starts = [c for c in candidates if c is not None]
     return min(starts) if starts else today - timedelta(days=365)
 

@@ -597,6 +597,82 @@ class TestPortfolioReports:
         assert report["positions"] == []
         assert len(report["bank_investments"]) == 1
 
+    def test_realized_pnl_converts_at_sale_date_rate(self, client, asset_ids):
+        # USDMXN 20 for most of history, 25 for the last 50 days
+        seed_flat_bars(asset_ids)
+        end = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        with session_scope() as session:
+            upsert_candles(
+                session,
+                [
+                    {
+                        "asset_id": asset_ids["USDMXN"], "interval": "1d",
+                        "ts": end - timedelta(days=i), "open": 25.0, "high": 25.0,
+                        "low": 25.0, "close": 25.0, "volume": None,
+                    }
+                    for i in range(50)
+                ],
+            )
+        account = make_account(client, name="MX", type="bank", currency="MXN")
+        post_txn(client, account_id=account["id"], type="buy", asset_id=asset_ids["AAPL"],
+                 quantity=10, price=4000, currency="MXN", ts=iso_days_ago(200))
+        post_txn(client, account_id=account["id"], type="sell", asset_id=asset_ids["AAPL"],
+                 quantity=10, price=5000, currency="MXN", ts=iso_days_ago(100))
+
+        report = client.get(
+            "/api/v1/portfolio/positions", params={"currency": "USD"}, headers=AUTH
+        ).json()
+        # 10k MXN realized while USDMXN was 20 → 500 USD; today's 25 would say 400
+        assert report["totals"]["realized_pnl"] == pytest.approx(500.0, abs=1.0)
+
+    def test_transfer_without_price_is_market_valued_flow(self, client, asset_ids):
+        # exchange-synced transfers carry price=None; the account-scope flow must
+        # be the market value that day, not zero (which faked a loss)
+        seed_flat_bars(asset_ids)
+        account = make_account(client, name="Bitso", type="exchange")
+        post_txn(client, account_id=account["id"], type="buy", asset_id=asset_ids["AAPL"],
+                 quantity=10, price=190, ts=iso_days_ago(300))
+        post_txn(client, account_id=account["id"], type="transfer_out",
+                 asset_id=asset_ids["AAPL"], quantity=5, ts=iso_days_ago(100))
+
+        report = client.get(
+            "/api/v1/portfolio/performance",
+            params={"period": "1y", "currency": "USD", "account_id": account["id"]},
+            headers=AUTH,
+        ).json()
+        # AAPL drifts 200→240 over 400 days; 100 days ago ≈ 230
+        expected = 5 * (200.0 + (40.0 / 399.0) * 300.0)
+        transfer_flows = [amount for _, amount in report["flows"] if amount < 0]
+        assert transfer_flows, report["flows"]
+        assert transfer_flows[0] == pytest.approx(-expected, rel=0.02)
+
+    def test_stale_fx_rate_converts_with_structured_warning(self, client, asset_ids):
+        # USDMXN closes stop 30 days ago: conversion still uses the stale 20,
+        # never a silent 1.0, and the report says so machine-readably
+        end = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        with session_scope() as session:
+            upsert_candles(
+                session,
+                [
+                    {
+                        "asset_id": asset_ids["USDMXN"], "interval": "1d",
+                        "ts": end - timedelta(days=30 + i), "open": 20.0, "high": 20.0,
+                        "low": 20.0, "close": 20.0, "volume": None,
+                    }
+                    for i in range(10)
+                ],
+            )
+        account = make_account(client, name="MX", type="bank", currency="MXN")
+        post_txn(client, account_id=account["id"], type="deposit", quantity=1000,
+                 currency="MXN")
+        report = client.get(
+            "/api/v1/portfolio/positions", params={"currency": "USD"}, headers=AUTH
+        ).json()
+        assert report["cash"][0]["value"] == pytest.approx(50.0)  # stale 20, not 1.0
+        stale = [w for w in report["warnings"] if w.get("code") == "fx_stale"]
+        assert stale and stale[0]["from_currency"] == "MXN"
+        assert stale[0]["to_currency"] == "USD"
+
     def test_missing_fx_degrades_with_warning(self, client, asset_ids):
         # EUR cash with no EURUSD bars seeded: unconverted, but the report renders
         account = make_account(client, name="EU", type="bank", currency="EUR")
