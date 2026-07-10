@@ -75,6 +75,7 @@ def parse_message(raw: str, pair_to_symbol: dict[str, str]) -> dict | None:
     )
     return {
         "symbol": symbol,
+        "asset_class": "crypto",
         "price": close,
         "change_pct": round(change_pct, 4),
         "ts": ts,

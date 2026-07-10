@@ -1,8 +1,9 @@
-from app.core.logging import configure_logging
+from app.core.logging import configure_logging, get_logger
 from app.ingestion.eod import run_asset_backfill, run_eod_all, run_eod_ingestion
 from worker.celery_app import celery_app
 
 configure_logging()
+log = get_logger(__name__)
 
 # Ingestion tasks sleep inside the provider token bucket (Tiingo ~80s/symbol at
 # ~100 stocks ≈ 2.3h/night) — they need far more than the global 30-min limit.
@@ -103,10 +104,17 @@ def send_alert_digest() -> int:
 
 @celery_app.task(name="worker.tasks.check_maturities")
 def check_maturities() -> int:
-    """Flip matured bank investments and remind about upcoming maturities."""
+    """Flip matured bank investments and remind about upcoming maturities.
+    Locked: a concurrent duplicate run could roll the same investment twice."""
+    from app.core.locks import redis_lock
     from app.portfolio.maturities import run_maturity_check
+    from app.providers.registry import _shared_redis
 
-    return run_maturity_check()
+    with redis_lock(_shared_redis(), "bank:maturities", ttl_seconds=300) as acquired:
+        if not acquired:
+            log.info("check_maturities skipped: another run holds the lock")
+            return -1
+        return run_maturity_check()
 
 
 @celery_app.task(name="worker.tasks.run_agent_deep_dive", time_limit=900, soft_time_limit=840)
@@ -133,21 +141,39 @@ def run_nightly_research_memos() -> list[int]:
 def evaluate_price_alerts() -> dict:
     """Per-minute beat: fire any armed price alert whose live quote just crossed
     its threshold. Reads quote:last:* — keeps the streamer pure and the DB writes
-    + delivery in the worker."""
+    + delivery in the worker. A Redis lock keeps runs strictly serial: a backlog
+    of queued evaluations must not double-fire the same crossing."""
     from app.alerts.evaluate import evaluate_alerts
     from app.core.db import session_scope
+    from app.core.locks import redis_lock
+    from app.providers.registry import _shared_redis
 
-    with session_scope() as session:
-        return evaluate_alerts(session)
+    with redis_lock(_shared_redis(), "alerts:evaluate", ttl_seconds=110) as acquired:
+        if not acquired:
+            log.info("evaluate_price_alerts skipped: another run holds the lock")
+            return {"skipped": "locked"}
+        with session_scope() as session:
+            return evaluate_alerts(session)
 
 
 @celery_app.task(name="worker.tasks.sync_exchange", time_limit=600, soft_time_limit=570)
-def sync_exchange(account_id: int) -> int:
-    """Read-only Bitso sync for one exchange account; returns exchange_sync_runs.id."""
+def sync_exchange(account_id: int, repair: bool = False) -> int:
+    """Read-only Bitso sync for one exchange account; returns exchange_sync_runs.id.
+    repair=True (resync flow) overwrites synced trade rows from fresh provider data.
+    A per-account lock keeps "Sync now" and the nightly beat from interleaving —
+    two live BitsoClients would break per-instance nonce monotonicity."""
     from app.core.db import SessionLocal
+    from app.core.locks import redis_lock
     from app.exchanges.sync import sync_bitso_account
+    from app.providers.registry import _shared_redis
 
-    return sync_bitso_account(SessionLocal, account_id)
+    with redis_lock(
+        _shared_redis(), f"exchange:sync:{account_id}", ttl_seconds=590
+    ) as acquired:
+        if not acquired:
+            log.info("sync_exchange skipped: sync already running", account_id=account_id)
+            return -1
+        return sync_bitso_account(SessionLocal, account_id, repair=repair)
 
 
 @celery_app.task(name="worker.tasks.sync_exchange_nightly")

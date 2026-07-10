@@ -46,12 +46,13 @@ def test_subscribe_replays_last_quote(client):
 
     tick = {
         "symbol": "BTC",
+        "asset_class": "crypto",
         "price": 51234.5,
         "change_pct": 1.75,
         "ts": "2026-07-06T12:00:00+00:00",
         "source": "binance",
     }
-    _shared_redis().setex(_last_key("BTC"), 120, json.dumps(tick))
+    _shared_redis().setex(_last_key("crypto", "BTC"), 120, json.dumps(tick))
 
     with client.websocket_connect(f"/ws/quotes?token={TEST_TOKEN}") as ws:
         ws.send_json({"action": "subscribe", "symbols": ["BTC"]})

@@ -97,12 +97,12 @@ def test_handle_raw_publishes_tick():
         tick = await consumer.handle_raw(_combined("BTCUSDT", "51000", "50000"))
         assert tick["symbol"] == "BTC" and tick["price"] == 51000.0
 
-        stored = json.loads(await redis.get("quote:last:BTC"))
+        stored = json.loads(await redis.get("quote:last:crypto:BTC"))
         assert stored["price"] == 51000.0
 
         # an unsubscribed pair is ignored (no publish, returns None)
         assert await consumer.handle_raw(_combined("SOLUSDT", "1", "1")) is None
-        assert await redis.get("quote:last:SOL") is None
+        assert await redis.get("quote:last:crypto:SOL") is None
 
         await redis.aclose()
 

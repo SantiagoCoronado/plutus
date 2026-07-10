@@ -51,14 +51,18 @@ celery_app.conf.beat_schedule = {
         "task": "worker.tasks.refresh_fundamentals",
         "schedule": crontab(hour=6, minute=30, day_of_week="sun"),
     },
+    # expires ≤ cadence on the frequent entries: a worker backlog drops stale
+    # duplicate ticks instead of replaying them all at once
     "news-pull": {
         "task": "worker.tasks.pull_news",
         "schedule": crontab(minute="*/15"),
+        "options": {"expires": 14 * 60},
     },
     # checks every active mandate's cron and enqueues due scans
     "discovery-dispatcher": {
         "task": "worker.tasks.dispatch_scans",
         "schedule": crontab(minute="*/5"),
+        "options": {"expires": 4 * 60},
     },
     # after the 06:30 metrics refresh and the default 07:30 mandate preset,
     # so the daily summary covers the same morning's scans
@@ -70,6 +74,7 @@ celery_app.conf.beat_schedule = {
     "maturity-check": {
         "task": "worker.tasks.check_maturities",
         "schedule": crontab(hour=8, minute=30),
+        "options": {"expires": 6 * 3600},
     },
     # AI research memos for last night's top candidates — after the 06:30 metrics
     # refresh and 07:30 preset scans so memos cover the same morning's inbox
@@ -81,10 +86,14 @@ celery_app.conf.beat_schedule = {
     "sync-bitso": {
         "task": "worker.tasks.sync_exchange_nightly",
         "schedule": crontab(hour=3, minute=40),
+        "options": {"expires": 6 * 3600},
     },
-    # fire armed price alerts on a threshold crossing — reads the live quote cache
+    # fire armed price alerts on a threshold crossing — reads the live quote cache.
+    # expires < the minute cadence: a worker backlog drops stale duplicates
+    # instead of replaying them (the Redis lock is the second line of defense)
     "evaluate-price-alerts": {
         "task": "worker.tasks.evaluate_price_alerts",
         "schedule": crontab(minute="*"),
+        "options": {"expires": 55},
     },
 }

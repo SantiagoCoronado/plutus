@@ -101,6 +101,7 @@ class PollLoop:
         change_pct = (quote.price - prev_close) / prev_close * 100.0 if prev_close else 0.0
         return {
             "symbol": symbol,
+            "asset_class": asset_class,
             "price": quote.price,
             "change_pct": round(change_pct, 4),
             "ts": datetime.now(UTC).isoformat(),

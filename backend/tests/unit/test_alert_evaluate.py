@@ -10,7 +10,7 @@ import json
 from decimal import Decimal
 
 from app.alerts.evaluate import _fmt_amount, should_fire
-from app.quotes.publisher import read_last_quotes_sync
+from app.quotes.publisher import read_last_quotes_by_class_sync
 
 
 def D(value) -> Decimal:
@@ -96,19 +96,31 @@ class TestFlapSequence:
         assert fires == [False, True, False, True]
 
 
-class TestReadLastQuotesSync:
+class TestReadLastQuotesByClassSync:
     def test_returns_uppercased_and_skips_missing(self, fake_redis):
-        tick = {"symbol": "BTC", "price": 50000.0, "change_pct": 1.0,
-                "ts": "2026-07-06T00:00:00+00:00", "source": "binance"}
-        fake_redis.setex("quote:last:BTC", 120, json.dumps(tick))
+        tick = {"symbol": "BTC", "asset_class": "crypto", "price": 50000.0,
+                "change_pct": 1.0, "ts": "2026-07-06T00:00:00+00:00", "source": "binance"}
+        fake_redis.setex("quote:last:crypto:BTC", 120, json.dumps(tick))
 
-        result = read_last_quotes_sync(fake_redis, ["btc", "ETH"])
+        result = read_last_quotes_by_class_sync(
+            fake_redis, [("crypto", "btc"), ("crypto", "ETH")]
+        )
 
-        assert set(result) == {"BTC"}  # ETH has no key -> skipped (stale)
-        assert result["BTC"]["price"] == 50000.0
+        assert set(result) == {("crypto", "BTC")}  # ETH has no key -> skipped (stale)
+        assert result[("crypto", "BTC")]["price"] == 50000.0
 
-    def test_empty_symbols_returns_empty(self, fake_redis):
-        assert read_last_quotes_sync(fake_redis, []) == {}
+    def test_wrong_class_bucket_is_not_matched(self, fake_redis):
+        # a stock ticker colliding with a crypto symbol must not cross-match
+        tick = {"symbol": "BTC", "asset_class": "crypto", "price": 50000.0,
+                "change_pct": 1.0, "ts": "2026-07-06T00:00:00+00:00", "source": "binance"}
+        fake_redis.setex("quote:last:crypto:BTC", 120, json.dumps(tick))
+
+        result = read_last_quotes_by_class_sync(fake_redis, [("stock", "BTC")])
+
+        assert result == {}
+
+    def test_empty_pairs_returns_empty(self, fake_redis):
+        assert read_last_quotes_by_class_sync(fake_redis, []) == {}
 
 
 class TestFmtAmount:

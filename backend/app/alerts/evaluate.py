@@ -1,7 +1,9 @@
 """Price-alert evaluator: fire once on an actual threshold crossing.
 
 Runs every minute as a Celery beat task over the live quote cache
-(`quote:last:<SYMBOL>`, written by the streamer). For each armed rule we compare
+(`quote:last:<class>:<SYMBOL>`, written by the streamer). Quotes are matched by
+the rule asset's (class, symbol) bucket, so a stock and a crypto sharing a
+ticker can never fire each other's alerts. For each armed rule we compare
 the previous observation (`last_price`) with the current quote:
 
   - `last_price IS NULL` is the re-baseline contract: it is a first observation
@@ -31,7 +33,7 @@ from sqlalchemy.orm import Session
 from app.core.logging import get_logger
 from app.discovery.notify import deliver
 from app.models import AlertRule, Asset
-from app.quotes.publisher import read_last_quotes_sync
+from app.quotes.publisher import read_last_quotes_by_class_sync
 
 log = get_logger(__name__)
 
@@ -67,17 +69,17 @@ def evaluate_alerts(session: Session, redis_client=None) -> dict[str, int]:
         redis_client = _shared_redis()
 
     rows = session.execute(
-        select(AlertRule, Asset.symbol, Asset.name)
+        select(AlertRule, Asset.symbol, Asset.name, Asset.asset_class)
         .join(Asset, Asset.id == AlertRule.asset_id)
         .where(AlertRule.status == "armed")
     ).all()
 
-    symbols = [symbol for _, symbol, _ in rows]
-    quotes = read_last_quotes_sync(redis_client, symbols)
+    pairs = [(asset_class, symbol) for _, symbol, _, asset_class in rows]
+    quotes = read_last_quotes_by_class_sync(redis_client, pairs)
 
     evaluated = fired = stale = 0
-    for rule, symbol, name in rows:
-        tick = quotes.get(symbol.upper())
+    for rule, symbol, name, asset_class in rows:
+        tick = quotes.get((asset_class, symbol.upper()))
         current = _tick_price(tick)
         if current is None:
             # no fresh quote — keep the crossing memory, try again next minute

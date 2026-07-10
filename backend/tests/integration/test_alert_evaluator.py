@@ -62,19 +62,20 @@ def _armed_rule(condition="above", threshold=120000, symbol=SYMBOL, status="arme
         return asset.id, rule.id
 
 
-def _set_quote(redis, price, symbol=SYMBOL):
+def _set_quote(redis, price, symbol=SYMBOL, asset_class="crypto"):
     tick = {
         "symbol": symbol,
+        "asset_class": asset_class,
         "price": price,
         "change_pct": 0.0,
         "ts": "2026-07-06T12:00:00+00:00",
         "source": "binance",
     }
-    redis.setex(f"quote:last:{symbol.upper()}", 120, json.dumps(tick))
+    redis.setex(f"quote:last:{asset_class}:{symbol.upper()}", 120, json.dumps(tick))
 
 
-def _clear_quote(redis, symbol=SYMBOL):
-    redis.delete(f"quote:last:{symbol.upper()}")
+def _clear_quote(redis, symbol=SYMBOL, asset_class="crypto"):
+    redis.delete(f"quote:last:{asset_class}:{symbol.upper()}")
 
 
 def _run(redis):
@@ -162,6 +163,55 @@ class TestBaselineThenFire:
         assert len(captured) == 1
 
         _clear_quote(redis)
+
+
+class TestClassIsolation:
+    def test_stock_alert_never_fires_from_a_crypto_quote(self, redis, monkeypatch):
+        monkeypatch.setattr(evaluate_module, "deliver", lambda *a, **k: [])
+        # a stock sharing the crypto's ticker, alert on the STOCK
+        with session_scope() as session:
+            stock = Asset(
+                symbol=SYMBOL, name=f"{SYMBOL} Inc", asset_class="stock", currency="USD"
+            )
+            session.add(stock)
+            session.flush()
+            rule = AlertRule(asset_id=stock.id, condition="above", threshold=10, status="armed")
+            session.add(rule)
+            session.flush()
+            alert_id = rule.id
+
+        # only the CRYPTO bucket has a quote, far beyond the stock rule's threshold
+        _set_quote(redis, 100000, asset_class="crypto")
+        summary = _run(redis)
+
+        # the stock rule sees no quote at all: stale, never a cross-class fire
+        assert summary == {"evaluated": 0, "fired": 0, "stale": 1}
+        assert _reload(alert_id)["status"] == "armed"
+
+        # its own bucket does reach it (baseline first, then fire on the cross)
+        _set_quote(redis, 5, asset_class="stock")
+        _run(redis)
+        _set_quote(redis, 15, asset_class="stock")
+        summary = _run(redis)
+        assert summary["fired"] == 1
+        assert _reload(alert_id)["status"] == "triggered"
+
+
+class TestEvaluatorLock:
+    def test_locked_evaluator_task_skips(self, redis):
+        from worker.tasks import evaluate_price_alerts
+
+        redis.set("lock:alerts:evaluate", "someone-else", ex=60)
+        try:
+            assert evaluate_price_alerts() == {"skipped": "locked"}
+        finally:
+            redis.delete("lock:alerts:evaluate")
+
+    def test_unlocked_evaluator_task_runs(self, redis):
+        from worker.tasks import evaluate_price_alerts
+
+        summary = evaluate_price_alerts()
+        assert "evaluated" in summary
 
 
 class TestReArm:
