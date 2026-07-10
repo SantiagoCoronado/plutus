@@ -183,6 +183,35 @@ class TestSyncRoute:
         assert resp.status_code == 202, resp.text
         assert resp.json()["task_id"] == "task-xyz"
 
+    def test_resync_resets_cursors_and_enqueues_repair(self, client, monkeypatch):
+        account_id = _create_exchange_account()
+        with session_scope() as session:
+            link = ExchangeLink(
+                account_id=account_id, provider="bitso",
+                last_trade_tid="101", last_funding_id="f2", last_withdrawal_id="w2",
+            )
+            session.add(link)
+
+        import worker.tasks as tasks
+
+        calls: list[tuple] = []
+
+        def fake_delay(*args):
+            calls.append(args)
+            return types.SimpleNamespace(id="task-repair")
+
+        monkeypatch.setattr(tasks.sync_exchange, "delay", fake_delay)
+        resp = client.post(f"/api/v1/exchanges/{account_id}/resync", headers=AUTH)
+        assert resp.status_code == 202, resp.text
+        assert calls == [(account_id, True)]
+        with session_scope() as session:
+            link = session.scalar(
+                select(ExchangeLink).where(ExchangeLink.account_id == account_id)
+            )
+            assert link.last_trade_tid is None
+            assert link.last_funding_id is None
+            assert link.last_withdrawal_id is None
+
     def test_rejects_non_exchange_account(self, client):
         account_id = _create_exchange_account(name="Cash", provider=None, account_type="manual")
         resp = client.post(f"/api/v1/exchanges/{account_id}/sync", headers=AUTH)
@@ -230,12 +259,14 @@ class TestFullSync:
             assert run.status == "success"
             assert run.trades_created == 6
             assert run.trades_skipped == 0
+            assert run.details["unresolved_skips"] == 1  # the pending f3
 
             link = session.scalar(
                 select(ExchangeLink).where(ExchangeLink.account_id == account_id)
             )
             assert link.last_trade_tid == "101"
-            assert link.last_funding_id == "f3"
+            # f3 is pending: the cursor freezes at f2 so f3 is re-fetched until terminal
+            assert link.last_funding_id == "f2"
             assert link.last_withdrawal_id == "w2"
             assert link.last_status == "success"
             assert link.last_synced_at is not None
@@ -251,6 +282,127 @@ class TestFullSync:
             assert run2.status == "success"
             assert run2.trades_created == 0
             assert run2.trades_skipped == 6
+
+    @respx.mock(base_url=BITSO)
+    def test_pending_funding_lands_after_completion(self, respx_mock, fernet_env):
+        seed_assets()
+        account_id = _create_exchange_account()
+        _store_creds()
+        _mock_bitso(respx_mock)
+
+        from app.exchanges.sync import sync_bitso_account
+        from app.models import ExchangeSyncSkip
+
+        sync_bitso_account(SessionLocal, account_id)
+        with session_scope() as session:
+            skip = session.scalar(
+                select(ExchangeSyncSkip).where(ExchangeSyncSkip.external_id == "f3")
+            )
+            assert skip is not None
+            assert skip.reason == "pending_status"
+            assert skip.resolved_at is None
+
+        # the deposit completes on Bitso; the frozen cursor re-fetches it
+        completed = dict(FUNDINGS[2], status="complete")
+        respx_mock.get("/v3/fundings").mock(return_value=_wrap([completed]))
+        sync_bitso_account(SessionLocal, account_id)
+
+        with session_scope() as session:
+            landed = session.scalar(
+                select(Transaction).where(
+                    Transaction.account_id == account_id, Transaction.external_id == "f3"
+                )
+            )
+            assert landed is not None
+            assert landed.type == "deposit"
+            assert float(landed.quantity) == pytest.approx(100.0)
+            skip = session.scalar(
+                select(ExchangeSyncSkip).where(ExchangeSyncSkip.external_id == "f3")
+            )
+            assert skip.resolved_at is not None
+            link = session.scalar(
+                select(ExchangeLink).where(ExchangeLink.account_id == account_id)
+            )
+            assert link.last_funding_id == "f3"
+
+    @respx.mock(base_url=BITSO)
+    def test_unknown_symbol_trade_lands_once_tracked(self, respx_mock, fernet_env):
+        seed_assets()
+        account_id = _create_exchange_account()
+        _store_creds()
+        sol_trade = {
+            "tid": 200, "book": "sol_mxn", "side": "buy",
+            "major": "3", "minor": "-9000", "price": "3000",
+            "fees_amount": "-9", "fees_currency": "mxn",
+            "created_at": "2026-05-03T10:00:00+00:00",
+        }
+        respx_mock.get("/v3/user_trades").mock(return_value=_wrap([sol_trade]))
+        respx_mock.get("/v3/fundings").mock(return_value=_wrap([]))
+        respx_mock.get("/v3/withdrawals").mock(return_value=_wrap([]))
+
+        from app.exchanges.sync import sync_bitso_account
+        from app.models import Asset, ExchangeSyncSkip
+
+        run_id = sync_bitso_account(SessionLocal, account_id)
+        with session_scope() as session:
+            assert session.scalar(
+                select(Transaction).where(Transaction.external_id == "200")
+            ) is None
+            skip = session.scalar(
+                select(ExchangeSyncSkip).where(ExchangeSyncSkip.external_id == "200")
+            )
+            assert skip is not None and skip.reason == "unknown_symbol"
+            run = session.get(ExchangeSyncRun, run_id)
+            assert run.details["skipped_unknown_symbols"] == ["SOL"]
+            assert run.details["unresolved_skips"] == 1
+
+        with session_scope() as session:
+            session.add(Asset(symbol="SOL", name="Solana", asset_class="crypto"))
+
+        # the retry pass at the start of the next sync lands it from the payload
+        respx_mock.get("/v3/user_trades").mock(return_value=_wrap([]))
+        sync_bitso_account(SessionLocal, account_id)
+        with session_scope() as session:
+            landed = session.scalar(
+                select(Transaction).where(Transaction.external_id == "200")
+            )
+            assert landed is not None
+            assert landed.type == "buy"
+            assert float(landed.quantity) == pytest.approx(3.0)
+            skip = session.scalar(
+                select(ExchangeSyncSkip).where(ExchangeSyncSkip.external_id == "200")
+            )
+            assert skip.resolved_at is not None
+
+    @respx.mock(base_url=BITSO)
+    def test_repair_rewalk_overwrites_synced_rows(self, respx_mock, fernet_env):
+        seed_assets()
+        account_id = _create_exchange_account()
+        _store_creds()
+        _mock_bitso(respx_mock)
+
+        from app.exchanges.sync import reset_cursors, sync_bitso_account
+
+        sync_bitso_account(SessionLocal, account_id)
+        with session_scope() as session:
+            buy = session.scalar(
+                select(Transaction).where(Transaction.external_id == "100")
+            )
+            buy.quantity = 999  # simulate a row synced under older, wrong normalization
+
+        with session_scope() as session:
+            reset_cursors(session, account_id)
+        sync_bitso_account(SessionLocal, account_id, repair=True)
+
+        with session_scope() as session:
+            buy = session.scalar(
+                select(Transaction).where(Transaction.external_id == "100")
+            )
+            assert float(buy.quantity) == pytest.approx(0.5)
+            txns = session.scalars(
+                select(Transaction).where(Transaction.account_id == account_id)
+            ).all()
+            assert len(txns) == 6  # the rewalk created zero duplicates
 
     @respx.mock(base_url=BITSO)
     def test_no_credentials_fails_the_run(self, respx_mock, fernet_env):
@@ -285,3 +437,4 @@ class TestFullSync:
         assert account["last_status"] == "success"
         assert account["last_run"]["trades_created"] == 6
         assert account["provider"] == "bitso"
+        assert account["unresolved_skips"] == 1  # the pending f3

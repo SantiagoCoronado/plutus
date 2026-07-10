@@ -138,6 +138,7 @@ export default function BitsoSection() {
                   <th className="px-3 py-2 font-normal">last synced</th>
                   <th className="px-3 py-2 font-normal">status</th>
                   <th className="px-3 py-2 font-normal">last run</th>
+                  <th className="px-3 py-2 font-normal">pending items</th>
                 </tr>
               </thead>
               <tbody>
@@ -165,6 +166,14 @@ export default function BitsoSection() {
                       {account.last_run
                         ? `${account.last_run.trades_created} new · ${account.last_run.trades_skipped} skipped`
                         : '—'}
+                    </td>
+                    <td
+                      className={`px-3 py-2 ${
+                        account.unresolved_skips > 0 ? 'text-amber-400' : 'text-zinc-500'
+                      }`}
+                      title="items seen on Bitso that could not land yet (pending status or untracked symbol); they retry on every sync"
+                    >
+                      {account.unresolved_skips > 0 ? account.unresolved_skips : '—'}
                     </td>
                   </tr>
                 ))}

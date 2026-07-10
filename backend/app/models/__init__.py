@@ -22,6 +22,7 @@ from app.models.bank_investment import (
     DAY_COUNTS,
     INVESTMENT_STATUSES,
     BankInvestment,
+    BankInvestmentTerm,
 )
 from app.models.base import Base
 from app.models.discovery import (
@@ -40,6 +41,7 @@ from app.models.exchange import (
     EXCHANGE_SYNC_STATUSES,
     ExchangeLink,
     ExchangeSyncRun,
+    ExchangeSyncSkip,
 )
 from app.models.fundamentals import FUNDAMENTAL_COLUMNS, Fundamentals
 from app.models.ingestion_run import IngestionRun
@@ -96,10 +98,12 @@ __all__ = [
     "AssetNote",
     "Backtest",
     "BankInvestment",
+    "BankInvestmentTerm",
     "Base",
     "Candidate",
     "ExchangeLink",
     "ExchangeSyncRun",
+    "ExchangeSyncSkip",
     "Fundamentals",
     "IngestionRun",
     "Mandate",

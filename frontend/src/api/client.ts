@@ -633,12 +633,17 @@ export interface AllocationReport {
   groups: { key: string; value: number | null; weight: number | null }[]
 }
 
+export type CsvNumberFormat = '1,234.56' | '1.234,56'
+export type CsvDateOrder = 'auto' | 'dayfirst' | 'monthfirst'
+
 export interface CsvPreview {
   columns: string[]
   sample_rows: Record<string, string>[]
   row_count: number
   preset: string | null
   suggested_mapping: Record<string, string>
+  suggested_number_format: CsvNumberFormat
+  suggested_date_order: CsvDateOrder
 }
 
 export interface CsvCommitResult {
@@ -811,6 +816,7 @@ export interface ExchangeAccountStatus {
   last_synced_at: string | null
   last_status: string | null
   last_run: ExchangeRun | null
+  unresolved_skips: number
 }
 
 export interface ExchangeStatus {
@@ -1127,7 +1133,13 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ content }),
     }),
-  csvCommit: (body: { account_id: number; content: string; mapping: Record<string, string> }) =>
+  csvCommit: (body: {
+    account_id: number
+    content: string
+    mapping: Record<string, string>
+    number_format?: CsvNumberFormat
+    date_order?: CsvDateOrder
+  }) =>
     request<CsvCommitResult>('/portfolio/import/csv/commit', {
       method: 'POST',
       body: JSON.stringify(body),
@@ -1221,6 +1233,10 @@ export const api = {
   testBitso: () => request<BitsoTestResult>('/exchanges/bitso/test', { method: 'POST' }),
   syncExchangeAccount: (accountId: number) =>
     request<{ task_id: string; status: string }>(`/exchanges/${accountId}/sync`, {
+      method: 'POST',
+    }),
+  resyncExchangeAccount: (accountId: number) =>
+    request<{ task_id: string; status: string }>(`/exchanges/${accountId}/resync`, {
       method: 'POST',
     }),
 

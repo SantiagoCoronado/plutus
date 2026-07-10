@@ -10,6 +10,7 @@ from app.exchanges.settings_store import (
     masked_bitso_keys,
     set_exchange_setting,
 )
+from app.exchanges.sync import reset_cursors, unresolved_skip_count
 from app.llm.crypto import FernetKeyMissing
 from app.models import Account, ExchangeLink, ExchangeSyncRun
 from app.providers.base import ProviderAuthError, ProviderError
@@ -56,6 +57,7 @@ def exchange_status(db: Session = Depends(get_db)):
                 provider=account.provider or (link.provider if link else None),
                 last_synced_at=link.last_synced_at if link else None,
                 last_status=link.last_status if link else None,
+                unresolved_skips=unresolved_skip_count(db, account.id),
                 last_run=(
                     ExchangeRunOut(
                         status=run.status,
@@ -119,15 +121,38 @@ def test_bitso(db: Session = Depends(get_db)):
 
 @router.post("/{account_id}/sync", status_code=202)
 def sync_account(account_id: int, db: Session = Depends(get_db)):
+    _require_exchange_account(db, account_id)
+    return _enqueue_sync(account_id)
+
+
+@router.post("/{account_id}/resync", status_code=202)
+def resync_account(account_id: int, db: Session = Depends(get_db)):
+    """Rewalk the account's full history: cursors reset to the beginning and the
+    sync runs in repair mode, so synced trade rows are refreshed from provider
+    data and previously skipped items get another chance. Dedup on external_id
+    guarantees the rewalk creates zero duplicates."""
+    _require_exchange_account(db, account_id)
+    reset_cursors(db, account_id)
+    return _enqueue_sync(account_id, repair=True)
+
+
+def _require_exchange_account(db: Session, account_id: int) -> Account:
     account = db.get(Account, account_id)
     if account is None:
         raise HTTPException(status_code=404, detail="account not found")
     if account.type != "exchange":
         raise HTTPException(status_code=422, detail="account is not an exchange account")
+    return account
+
+
+def _enqueue_sync(account_id: int, repair: bool = False):
     try:
         from worker.tasks import sync_exchange
 
-        result = sync_exchange.delay(account_id)
+        if repair:
+            result = sync_exchange.delay(account_id, True)
+        else:
+            result = sync_exchange.delay(account_id)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=503, detail=f"could not enqueue sync (is redis/worker up?): {exc}"

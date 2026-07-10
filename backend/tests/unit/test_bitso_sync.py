@@ -9,11 +9,14 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.exchanges.base import ExchangeTrade
+from app.exchanges.base import ExchangeFunding, ExchangeTrade
 from app.exchanges.bitso import PAGE_LIMIT
 from app.exchanges.sync import (
+    _record_from_skip,
     _resolve_asset,
+    _sync_fundings,
     _sync_trades,
+    _trade_payload,
     _trade_record,
     _transfer_record,
 )
@@ -205,3 +208,157 @@ class TestPagination:
 def _asset_lookup_from(assets: dict[str, list[Asset]]):
     # csv_import._asset_lookup reads a session; reuse the same shape it produces
     return assets
+
+
+class TestFeeCurrency:
+    """Fees are carried in the quote currency; a major-denominated buy fee is
+    netted out of quantity so basis, cash, and holdings all stay exact."""
+
+    def _buy(self, fees_currency: str, fees_amount: float = -0.001) -> ExchangeTrade:
+        return ExchangeTrade(
+            tid="9", book="btc_mxn", side="buy", major=0.5, minor=-500_000.0,
+            price=1_000_000.0, fees_amount=fees_amount, fees_currency=fees_currency,
+            created_at=TS,
+        )
+
+    def test_fee_in_quote_is_unchanged(self):
+        record = _trade_record(1, self._buy("mxn", -10.0), _assets(_asset("BTC")), set())
+        assert record["quantity"] == pytest.approx(0.5)
+        assert record["fees"] == pytest.approx(10.0)
+        assert record["note"] is None
+
+    def test_buy_fee_in_major_nets_quantity_and_converts_fee(self):
+        record = _trade_record(1, self._buy("btc"), _assets(_asset("BTC")), set())
+        # received 0.5 - 0.001 BTC; fee carried as its quote value
+        assert record["quantity"] == pytest.approx(0.499)
+        assert record["fees"] == pytest.approx(0.001 * 1_000_000.0)
+        assert "netted from quantity" in record["note"]
+        # total cost is still exactly the minor paid: q·p + fees == major·p
+        assert record["quantity"] * record["price"] + record["fees"] == pytest.approx(500_000.0)
+
+    def test_sell_fee_in_major_converts_without_netting(self):
+        trade = ExchangeTrade(
+            tid="9", book="btc_mxn", side="sell", major=-0.5, minor=500_000.0,
+            price=1_000_000.0, fees_amount=-0.001, fees_currency="btc", created_at=TS,
+        )
+        record = _trade_record(1, trade, _assets(_asset("BTC")), set())
+        assert record["quantity"] == pytest.approx(0.5)
+        assert record["fees"] == pytest.approx(1_000.0)
+        assert "carried at execution price" in record["note"]
+
+    def test_fee_in_third_currency_is_dropped_with_note(self):
+        record = _trade_record(1, self._buy("usd", -1.0), _assets(_asset("BTC")), set())
+        assert record["quantity"] == pytest.approx(0.5)
+        assert record["fees"] == 0.0
+        assert "not converted" in record["note"]
+
+    def test_blank_fee_currency_defaults_to_quote(self):
+        record = _trade_record(1, self._buy("", -10.0), _assets(_asset("BTC")), set())
+        assert record["fees"] == pytest.approx(10.0)
+        assert record["note"] is None
+
+
+class TestSkipPayloadRoundtrip:
+    def test_trade_skip_lands_once_asset_is_tracked(self):
+        trade = ExchangeTrade(
+            tid="42", book="sol_mxn", side="buy", major=3.0, minor=-9_000.0,
+            price=3_000.0, fees_amount=-9.0, fees_currency="mxn", created_at=TS,
+        )
+        unknown: set[str] = set()
+        assert _trade_record(1, trade, _assets(), unknown) is None  # not tracked yet
+        payload = _trade_payload(trade)
+
+        record = _record_from_skip(1, "trade", payload, _assets(_asset("SOL", asset_id=9)), unknown)
+        assert record is not None
+        assert record["asset_id"] == 9
+        assert record["external_id"] == "42"
+        assert record["quantity"] == pytest.approx(3.0)
+        assert record["ts"] == TS
+
+
+class _FakeTransferSession(_FakeSession):
+    """Counts executes/commits like _FakeSession and answers the pending-skip
+    lookup _sync_transfers issues before walking pages."""
+
+    def __init__(self, pending_ids=()):
+        super().__init__()
+        self._pending = list(pending_ids)
+
+    def scalars(self, _stmt):
+        return list(self._pending)
+
+
+class _FakeFundingLink:
+    last_funding_id = None
+
+
+class _FakeFundingClient:
+    def __init__(self, pages):
+        self.pages = list(pages)
+        self.markers: list[str | None] = []
+
+    def fetch_fundings(self, since_id=None):
+        self.markers.append(since_id)
+        return self.pages.pop(0) if self.pages else []
+
+
+def _funding(fid: str, status: str = "complete", currency: str = "MXN") -> ExchangeFunding:
+    return ExchangeFunding(
+        fid=fid, currency=currency, amount=100.0, status=status, created_at=TS, method="spei"
+    )
+
+
+class TestPendingCursorFreeze:
+    def test_pending_row_freezes_cursor_but_later_rows_still_land(self):
+        assets = _assets(_asset("BTC", asset_id=7))
+        client = _FakeFundingClient(
+            [[_funding("f1"), _funding("f2", status="pending"), _funding("f3")]]
+        )
+        session = _FakeTransferSession()
+        link = _FakeFundingLink()
+
+        created, skipped, pages = _sync_fundings(session, 1, link, client, assets, set())
+
+        # f1 and f3 inserted, but the cursor stops at f1 so f2 is re-fetched later
+        assert created == 2
+        assert pages == 1
+        assert link.last_funding_id == "f1"
+        assert client.markers == [None]
+
+    def test_completed_pending_row_advances_cursor_on_rewalk(self):
+        assets = _assets(_asset("BTC", asset_id=7))
+        client = _FakeFundingClient([[_funding("f2"), _funding("f3")]])
+        session = _FakeTransferSession(pending_ids=["f2"])
+        link = _FakeFundingLink()
+        link.last_funding_id = "f1"
+
+        created, skipped, pages = _sync_fundings(session, 1, link, client, assets, set())
+
+        assert created == 2  # the fake session treats every insert as fresh
+        assert link.last_funding_id == "f3"
+        assert client.markers == ["f1"]
+
+    def test_leading_pending_row_never_advances_cursor(self):
+        assets = _assets(_asset("BTC", asset_id=7))
+        client = _FakeFundingClient([[_funding("f2", status="pending"), _funding("f3")]])
+        session = _FakeTransferSession()
+        link = _FakeFundingLink()
+        link.last_funding_id = "f1"
+
+        _sync_fundings(session, 1, link, client, assets, set())
+
+        assert link.last_funding_id == "f1"
+
+    def test_failed_and_cancelled_are_terminal_but_create_nothing(self):
+        assets = _assets(_asset("BTC", asset_id=7))
+        client = _FakeFundingClient(
+            [[_funding("f1", status="failed"), _funding("f2", status="cancelled")]]
+        )
+        session = _FakeTransferSession()
+        link = _FakeFundingLink()
+
+        created, skipped, pages = _sync_fundings(session, 1, link, client, assets, set())
+
+        assert created == 0
+        assert skipped == 0
+        assert link.last_funding_id == "f2"

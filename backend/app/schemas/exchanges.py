@@ -26,6 +26,8 @@ class ExchangeAccountOut(BaseModel):
     last_synced_at: datetime | None
     last_status: str | None
     last_run: ExchangeRunOut | None
+    # items the sync saw but could not land yet (pending status / untracked symbol)
+    unresolved_skips: int = 0
 
 
 class ExchangeStatusOut(BaseModel):
