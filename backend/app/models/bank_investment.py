@@ -80,3 +80,34 @@ class BankInvestment(Base):
         ),
         Index("ix_bank_investments_status_maturity", "status", "maturity_date"),
     )
+
+
+class BankInvestmentTerm(Base):
+    """One term in an investment's append-only history. A rollover closes the
+    active row (sets end_date) and opens the next with the capitalized
+    principal — history is never rewritten. An investment with no rows here is
+    a single term described by its parent row."""
+
+    __tablename__ = "bank_investment_terms"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    investment_id: Mapped[int] = mapped_column(
+        ForeignKey("bank_investments.id", ondelete="CASCADE")
+    )
+    start_date: Mapped[date] = mapped_column(Date)
+    # NULL marks the currently-active term
+    end_date: Mapped[date | None] = mapped_column(Date)
+    principal: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    annual_rate: Mapped[Decimal] = mapped_column(Numeric(10, 6))
+    rate_tiers: Mapped[list[Any] | None] = mapped_column(JSONB)
+    cap_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 8))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint("principal > 0", name="ck_bank_investment_terms_principal"),
+        CheckConstraint("annual_rate >= 0", name="ck_bank_investment_terms_annual_rate"),
+        CheckConstraint(
+            "end_date IS NULL OR end_date > start_date", name="ck_bank_investment_terms_dates"
+        ),
+        Index("ix_bank_investment_terms_investment_start", "investment_id", "start_date"),
+    )

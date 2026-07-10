@@ -10,6 +10,7 @@ means the first 25k earns 15% and everything above it 5%.
 from __future__ import annotations
 
 import calendar
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 
@@ -81,11 +82,27 @@ def effective_annual_rate(terms: Terms) -> float:
 def daily_value_series(terms: Terms, start: date, end: date) -> pd.Series:
     """Value of the investment on each calendar day in [start, end] — the input
     the portfolio valuation grid needs. Zero before the investment starts."""
+    return history_value_series([terms], start, end)
+
+
+def history_value_series(history: Sequence[Terms], start: date, end: date) -> pd.Series:
+    """daily_value_series across an investment's whole term history: each day
+    is valued under the term active that day, so a capitalizing renewal (old
+    maturity value == next principal) keeps the series continuous instead of
+    zeroing out the days before the current term. Zero before the first term
+    starts; capitalized interest is return, never an external flow."""
+    ordered = sorted(history, key=lambda terms: terms.start_date)
     days = pd.date_range(start, end, freq="D")
-    values = [
-        0.0 if day.date() < terms.start_date else current_value(terms, day.date())
-        for day in days
-    ]
+    values = []
+    for stamp in days:
+        day = stamp.date()
+        active = None
+        for terms in ordered:
+            if terms.start_date <= day:
+                active = terms
+            else:
+                break
+        values.append(current_value(active, day) if active is not None else 0.0)
     return pd.Series(values, index=days)
 
 

@@ -1,18 +1,24 @@
 """Bank-investment accrual math, hand-computed fixtures."""
 
 from datetime import date
+from decimal import Decimal
 
+import pandas as pd
 import pytest
 
+from app.models import BankInvestment, BankInvestmentTerm
 from app.portfolio.interest import (
     Terms,
     accrued_interest,
     current_value,
     daily_value_series,
     effective_annual_rate,
+    history_value_series,
     projected_maturity_value,
     year_fraction,
 )
+from app.portfolio.performance import twr
+from app.portfolio.valuation import _term_history
 
 
 def make_terms(**overrides) -> Terms:
@@ -137,3 +143,105 @@ class TestDailySeries:
         assert started.iloc[0] == pytest.approx(100_000.0)  # day 0: no accrual yet
         assert (started.diff().dropna() >= 0).all()
         assert started.iloc[-1] > 100_000.0
+
+
+# the auto-renew fixture: 100k at 10% for 181 days capitalizes on Jul 1 and
+# rolls into a second 181-day term at the same rate
+CAPITALIZED = 100_000 * (1 + 0.10 * 181 / 360)
+
+
+def renewal_history() -> list[Terms]:
+    first = make_terms()
+    second = make_terms(
+        principal=CAPITALIZED,
+        start_date=date(2026, 7, 1),
+        maturity_date=date(2026, 12, 29),
+    )
+    return [first, second]
+
+
+class TestHistorySeries:
+    def test_continuous_and_monotone_across_renewal(self):
+        series = history_value_series(renewal_history(), date(2026, 6, 20), date(2026, 7, 10))
+        steps = series.diff().dropna()
+        assert (steps >= 0).all()
+        # no cliff: every daily step is accrual-sized, including the renewal day
+        assert steps.max() < CAPITALIZED * 0.10 / 360 * 2
+        assert series.loc["2026-07-01"] == pytest.approx(CAPITALIZED)
+
+    def test_twr_across_rollover_equals_accrued_rate(self):
+        # capitalization is return, not an external flow — TWR over a window
+        # spanning the rollover is the accrued rate, not a principal cliff
+        series = history_value_series(renewal_history(), date(2026, 6, 1), date(2026, 8, 1))
+        flows = pd.Series(0.0, index=series.index)
+        start_value = 100_000 * (1 + 0.10 * 151 / 360)  # Jun 1, day 151 of term 1
+        end_value = CAPITALIZED * (1 + 0.10 * 31 / 360)  # Aug 1, day 31 of term 2
+        assert twr(series, flows) == pytest.approx(end_value / start_value - 1)
+        assert twr(series, flows) < 0.02  # two months of 10%/360, nowhere near 100%
+
+    def test_single_term_history_matches_daily_value_series(self):
+        terms = make_terms()
+        expected = daily_value_series(terms, date(2025, 12, 30), date(2026, 1, 10))
+        got = history_value_series([terms], date(2025, 12, 30), date(2026, 1, 10))
+        pd.testing.assert_series_equal(got, expected)
+
+    def test_zero_before_first_term(self):
+        series = history_value_series(renewal_history(), date(2025, 12, 30), date(2026, 1, 2))
+        assert series.iloc[0] == 0.0
+        assert series.iloc[-1] > 0.0
+
+
+class TestTermHistoryMapping:
+    """valuation._term_history maps ORM rows -> Terms (transient, no session)."""
+
+    def _investment(self) -> BankInvestment:
+        return BankInvestment(
+            account_id=1,
+            name="pagare",
+            kind="fixed_term",
+            principal=Decimal("100000"),
+            currency="MXN",
+            annual_rate=Decimal("0.10"),
+            rate_tiers=None,
+            day_count="act360",
+            compounding="at_maturity",
+            start_date=date(2026, 1, 1),
+            term_days=181,
+            maturity_date=date(2026, 7, 1),
+            cap_amount=None,
+            auto_renew=True,
+            status="active",
+        )
+
+    def test_legacy_investment_without_rows_is_the_parent_term(self):
+        # pre-history data keeps working with no migration: exactly one term,
+        # identical to what the parent row has always described
+        assert _term_history(self._investment(), []) == [make_terms()]
+
+    def test_rows_map_closed_and_open_terms(self):
+        rows = [
+            BankInvestmentTerm(
+                investment_id=1,
+                start_date=date(2025, 7, 4),
+                end_date=date(2026, 1, 1),
+                principal=Decimal("95000"),
+                annual_rate=Decimal("0.10"),
+                rate_tiers=None,
+                cap_amount=None,
+            ),
+            BankInvestmentTerm(
+                investment_id=1,
+                start_date=date(2026, 1, 1),
+                end_date=None,
+                principal=Decimal("100000"),
+                annual_rate=Decimal("0.10"),
+                rate_tiers=None,
+                cap_amount=None,
+            ),
+        ]
+        closed, current = _term_history(self._investment(), rows)
+        # the closed term freezes at its capitalization date
+        assert closed.principal == 95_000.0
+        assert closed.maturity_date == date(2026, 1, 1)
+        # the open term follows the parent row's live maturity
+        assert current == make_terms()

@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.db import session_scope
 from app.discovery.notify import deliver
-from app.models import Account, BankInvestment, Notification
+from app.models import Account, BankInvestment, BankInvestmentTerm, Notification
 from app.portfolio.interest import Terms, projected_maturity_value
 
 log = structlog.get_logger()
@@ -55,10 +55,25 @@ def _roll_matured(session: Session) -> None:
                 f"auto-renewed on {investment.maturity_date}: principal "
                 f"{float(investment.principal):.2f} -> {value:.2f}"
             )
+            renewed_on = investment.maturity_date
+            _close_term(session, investment, renewed_on)
+            # the parent row keeps mirroring the *current* term (readers of
+            # principal/start_date stay correct); history lives in the terms
             investment.principal = round(value, 8)
-            investment.start_date = investment.maturity_date
+            investment.start_date = renewed_on
             investment.maturity_date = investment.start_date + timedelta(
                 days=investment.term_days
+            )
+            session.add(
+                BankInvestmentTerm(
+                    investment_id=investment.id,
+                    start_date=renewed_on,
+                    end_date=None,
+                    principal=investment.principal,
+                    annual_rate=investment.annual_rate,
+                    rate_tiers=investment.rate_tiers,
+                    cap_amount=investment.cap_amount,
+                )
             )
             investment.note = f"{investment.note}\n{note}" if investment.note else note
             log.info(
@@ -71,6 +86,34 @@ def _roll_matured(session: Session) -> None:
             investment.status = "matured"
             log.info("bank_investment_matured", investment_id=investment.id)
     session.flush()
+
+
+def _close_term(session: Session, investment: BankInvestment, closed_on: date) -> None:
+    """Seal the term that just matured (append-only: nothing is rewritten).
+    Investments created before the history table carry no rows yet, so the
+    finished term is synthesized from the parent row before it mutates."""
+    open_term = session.scalar(
+        select(BankInvestmentTerm)
+        .where(
+            BankInvestmentTerm.investment_id == investment.id,
+            BankInvestmentTerm.end_date.is_(None),
+        )
+        .limit(1)
+    )
+    if open_term is not None:
+        open_term.end_date = closed_on
+        return
+    session.add(
+        BankInvestmentTerm(
+            investment_id=investment.id,
+            start_date=investment.start_date,
+            end_date=closed_on,
+            principal=investment.principal,
+            annual_rate=investment.annual_rate,
+            rate_tiers=investment.rate_tiers,
+            cap_amount=investment.cap_amount,
+        )
+    )
 
 
 def _send_reminders(session: Session) -> int:
