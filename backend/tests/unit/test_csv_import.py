@@ -1,5 +1,6 @@
 """CSV importer: sniffing, mapping suggestion, preset detection, row parsing."""
 
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -7,9 +8,12 @@ import pytest
 from app.portfolio.csv_import import (
     RowError,
     _content_hash,
+    _read_csv,
     _row_to_record,
     parse_preview,
 )
+
+FIXTURES = Path(__file__).parent.parent / "fixtures"
 
 
 class FakeAsset:
@@ -151,6 +155,104 @@ class TestRowParsing:
         )
         assert record["price"] == pytest.approx(1_800_000)
         assert record["fees"] == pytest.approx(225)
+
+
+class TestSpanishLocale:
+    def test_comma_decimal_numbers(self):
+        record = _row_to_record(
+            row(amount="1,5", rate="1.234,56", fee="0,25"),
+            MAPPING,
+            ASSETS,
+            ZONE,
+            7,
+            number_format="1.234,56",
+        )
+        assert record["quantity"] == pytest.approx(1.5)
+        assert record["price"] == pytest.approx(1234.56)
+        assert record["fees"] == pytest.approx(0.25)
+
+    def test_dot_decimal_default_unchanged(self):
+        record = _row_to_record(row(rate="1,800,000.25"), MAPPING, ASSETS, ZONE, 7)
+        assert record["price"] == pytest.approx(1_800_000.25)
+
+    def test_dayfirst_and_monthfirst_pin_the_order(self):
+        dayfirst = _row_to_record(
+            row(date="02/03/2025 10:15"), MAPPING, ASSETS, ZONE, 7, date_order="dayfirst"
+        )
+        assert (dayfirst["ts"].month, dayfirst["ts"].day) == (3, 2)
+        monthfirst = _row_to_record(
+            row(date="02/03/2025 10:15"), MAPPING, ASSETS, ZONE, 7, date_order="monthfirst"
+        )
+        assert (monthfirst["ts"].month, monthfirst["ts"].day) == (2, 3)
+
+    def test_ambiguous_date_under_auto_is_a_row_error(self):
+        with pytest.raises(RowError, match="ambiguous.*date_order"):
+            _row_to_record(row(date="02/03/2025 10:15"), MAPPING, ASSETS, ZONE, 7)
+
+    def test_unambiguous_dates_parse_under_auto(self):
+        # day > 12 forces one reading; year-first is never ambiguous
+        record = _row_to_record(row(date="13/02/2025"), MAPPING, ASSETS, ZONE, 7)
+        assert (record["ts"].month, record["ts"].day) == (2, 13)
+        record = _row_to_record(row(date="2026-03-02 10:15"), MAPPING, ASSETS, ZONE, 7)
+        assert (record["ts"].month, record["ts"].day) == (3, 2)
+
+    def test_year_first_dates_ignore_date_order(self):
+        record = _row_to_record(
+            row(date="2026-03-02 10:15"), MAPPING, ASSETS, ZONE, 7, date_order="dayfirst"
+        )
+        assert (record["ts"].month, record["ts"].day) == (3, 2)
+
+    def test_sniffed_suggestions_in_preview(self):
+        content = (
+            "fecha,tipo,instrumento,cantidad,precio,divisa\n"
+            '13/03/2025,compra,BTC,"1,5","1.234,56",MXN\n'
+        )
+        preview = parse_preview(content)
+        assert preview.suggested_number_format == "1.234,56"
+        assert preview.suggested_date_order == "dayfirst"
+
+    def test_dot_decimal_iso_file_sniffs_defaults(self):
+        content = "date,type,symbol,amount,price\n2026-01-02,buy,BTC,1.5,200.25\n"
+        preview = parse_preview(content)
+        assert preview.suggested_number_format == "1,234.56"
+        assert preview.suggested_date_order == "auto"
+
+    def test_bitso_preset_pins_locale(self):
+        preview = parse_preview(BITSO_CSV)
+        assert preview.suggested_number_format == "1,234.56"
+        assert preview.suggested_date_order == "auto"
+
+    def test_golden_decimal_comma_dayfirst_fixture(self):
+        content = (FIXTURES / "spanish_locale.csv").read_text()
+        preview = parse_preview(content)
+        assert preview.preset is None
+        assert preview.suggested_number_format == "1.234,56"
+        assert preview.suggested_date_order == "dayfirst"
+        assert preview.suggested_mapping["ts"] == "fecha"
+        assert preview.suggested_mapping["quantity"] == "cantidad"
+
+        rows, _ = _read_csv(content)
+        records = [
+            _row_to_record(
+                raw,
+                preview.suggested_mapping,
+                ASSETS,
+                ZONE,
+                7,
+                number_format=preview.suggested_number_format,
+                date_order=preview.suggested_date_order,
+            )
+            for raw in rows
+        ]
+        first, second = records
+        assert first["type"] == "buy"
+        assert first["quantity"] == pytest.approx(1.5)
+        assert first["price"] == pytest.approx(1234.56)
+        assert first["fees"] == pytest.approx(0.5)
+        assert (first["ts"].year, first["ts"].month, first["ts"].day) == (2025, 3, 2)
+        assert second["type"] == "sell"
+        assert second["price"] == pytest.approx(2000.0)
+        assert (second["ts"].month, second["ts"].day) == (3, 13)
 
 
 def test_content_hash_is_deterministic():

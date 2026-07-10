@@ -120,5 +120,11 @@ def commit_csv(body: CsvCommitIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=422, detail={"errors": errors})
 
     return commit_rows(
-        db, account_id=body.account_id, content=body.content, mapping=body.mapping, tz=tz
+        db,
+        account_id=body.account_id,
+        content=body.content,
+        mapping=body.mapping,
+        tz=tz,
+        number_format=body.number_format,
+        date_order=body.date_order,
     )

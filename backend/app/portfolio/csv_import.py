@@ -16,6 +16,8 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import re
+import warnings
 from dataclasses import dataclass, field
 from zoneinfo import ZoneInfo
 
@@ -26,6 +28,9 @@ from sqlalchemy.orm import Session
 
 from app.models import Asset, Transaction
 from app.models.transaction import ASSET_TRANSACTION_TYPES, TRANSACTION_TYPES
+
+NUMBER_FORMATS = ("1,234.56", "1.234,56")  # dot-decimal | comma-decimal
+DATE_ORDERS = ("auto", "dayfirst", "monthfirst")
 
 TARGET_FIELDS = (
     "ts",
@@ -81,6 +86,10 @@ DEFAULT_TYPE_MAP = {
 PRESETS: dict[str, dict] = {
     "bitso": {
         "detect": frozenset({"tid", "type", "major", "minor", "amount", "rate"}),
+        # Bitso exports use dot decimals and year-first timestamps (never
+        # ambiguous under "auto"), so pin the safe defaults explicitly.
+        "number_format": "1,234.56",
+        "date_order": "auto",
         "mapping": {
             "external_id": "tid",
             "ts": "date",
@@ -102,6 +111,8 @@ class Preview:
     row_count: int
     preset: str | None
     suggested_mapping: dict[str, str]
+    suggested_number_format: str
+    suggested_date_order: str
 
 
 @dataclass
@@ -116,14 +127,20 @@ def parse_preview(content: str) -> Preview:
     preset = _detect_preset(columns)
     if preset is not None:
         suggested = dict(PRESETS[preset]["mapping"])
+        number_format = PRESETS[preset]["number_format"]
+        date_order = PRESETS[preset]["date_order"]
     else:
         suggested = _suggest_mapping(columns)
+        number_format = _sniff_number_format(rows)
+        date_order = _sniff_date_order(rows)
     return Preview(
         columns=columns,
         sample_rows=rows[:5],
         row_count=len(rows),
         preset=preset,
         suggested_mapping=suggested,
+        suggested_number_format=number_format,
+        suggested_date_order=date_order,
     )
 
 
@@ -134,6 +151,8 @@ def commit_rows(
     content: str,
     mapping: dict[str, str],
     tz: str,
+    number_format: str = "1,234.56",
+    date_order: str = "auto",
 ) -> CommitResult:
     rows, columns = _read_csv(content)
     result = CommitResult()
@@ -147,7 +166,15 @@ def commit_rows(
 
     for line_no, raw in enumerate(rows, start=2):  # 1 is the header line
         try:
-            record = _row_to_record(raw, mapping, assets, zone, account_id)
+            record = _row_to_record(
+                raw,
+                mapping,
+                assets,
+                zone,
+                account_id,
+                number_format=number_format,
+                date_order=date_order,
+            )
         except RowError as exc:
             result.errors.append({"row": line_no, "error": str(exc)})
             continue
@@ -213,6 +240,40 @@ def _suggest_mapping(columns: list[str]) -> dict[str, str]:
     return suggested
 
 
+# "1,5" / "1.234,56" → comma decimal; "1.5" / "1,234.56" → dot decimal
+_COMMA_DECIMAL = re.compile(r"^-?(?:\d+|\d{1,3}(?:\.\d{3})+),\d+$")
+_DOT_DECIMAL = re.compile(r"^-?(?:\d+|\d{1,3}(?:,\d{3})+)\.\d+$")
+# a date starting with a 1-2 digit component: the only ambiguous shape
+_AMBIGUOUS_DATE = re.compile(r"^(\d{1,2})[/.-](\d{1,2})[/.-]\d{2,4}")
+_YEAR_FIRST = re.compile(r"^\d{4}[/.-]")
+
+
+def _sniff_number_format(rows: list[dict]) -> str:
+    comma = dot = 0
+    for row in rows[:50]:
+        for value in row.values():
+            cleaned = (value or "").strip().replace("$", "")
+            if _COMMA_DECIMAL.match(cleaned):
+                comma += 1
+            elif _DOT_DECIMAL.match(cleaned):
+                dot += 1
+    return "1.234,56" if comma > dot else "1,234.56"
+
+
+def _sniff_date_order(rows: list[dict]) -> str:
+    for row in rows[:50]:
+        for value in row.values():
+            match = _AMBIGUOUS_DATE.match((value or "").strip())
+            if match is None:
+                continue
+            first, second = int(match.group(1)), int(match.group(2))
+            if first > 12 >= second:
+                return "dayfirst"
+            if second > 12 >= first:
+                return "monthfirst"
+    return "auto"
+
+
 def _asset_lookup(session: Session) -> dict[str, list[Asset]]:
     lookup: dict[str, list[Asset]] = {}
     for asset in session.scalars(select(Asset)).all():
@@ -227,8 +288,14 @@ def _value(raw: dict, mapping: dict[str, str], target: str) -> str:
     return (raw.get(column) or "").strip()
 
 
-def _number(raw: dict, mapping: dict[str, str], target: str) -> float | None:
-    text = _value(raw, mapping, target).replace(",", "").replace("$", "")
+def _number(
+    raw: dict, mapping: dict[str, str], target: str, number_format: str = "1,234.56"
+) -> float | None:
+    text = _value(raw, mapping, target).replace("$", "")
+    if number_format == "1.234,56":  # dots are thousands, comma is the decimal mark
+        text = text.replace(".", "").replace(",", ".")
+    else:
+        text = text.replace(",", "")
     if not text:
         return None
     try:
@@ -237,12 +304,33 @@ def _number(raw: dict, mapping: dict[str, str], target: str) -> float | None:
         raise RowError(f"{target}: '{text}' is not a number") from exc
 
 
+def _parse_ts(ts_text: str, date_order: str) -> pd.Timestamp:
+    if _YEAR_FIRST.match(ts_text):
+        # year-first is unambiguous; pandas would still let dayfirst swap the
+        # trailing month/day, so never pass it here
+        return pd.to_datetime(ts_text)
+    with warnings.catch_warnings():
+        # pandas warns when a value cannot honor dayfirst; the comparison
+        # below is exactly how we detect that, so silence it
+        warnings.simplefilter("ignore")
+        ts = pd.to_datetime(ts_text, dayfirst=date_order == "dayfirst")
+        if date_order == "auto" and ts != pd.to_datetime(ts_text, dayfirst=True):
+            raise RowError(
+                f"date '{ts_text}' is ambiguous (day-first vs month-first) — "
+                "set date_order to 'dayfirst' or 'monthfirst'"
+            )
+    return ts
+
+
 def _row_to_record(
     raw: dict,
     mapping: dict[str, str],
     assets: dict[str, list[Asset]],
     zone: ZoneInfo,
     account_id: int,
+    *,
+    number_format: str = "1,234.56",
+    date_order: str = "auto",
 ) -> dict:
     type_text = _value(raw, mapping, "type").lower()
     txn_type = DEFAULT_TYPE_MAP.get(type_text, type_text)
@@ -253,7 +341,7 @@ def _row_to_record(
     if not ts_text:
         raise RowError("missing date")
     try:
-        ts = pd.to_datetime(ts_text)
+        ts = _parse_ts(ts_text, date_order)
     except (ValueError, pd.errors.ParserError) as exc:
         raise RowError(f"could not parse date '{ts_text}'") from exc
     if ts.tzinfo is None:
@@ -267,11 +355,11 @@ def _row_to_record(
         symbol_text = symbol_text or base
         currency = currency or quote.upper()
 
-    quantity = _number(raw, mapping, "quantity")
+    quantity = _number(raw, mapping, "quantity", number_format)
     if quantity is None or quantity <= 0:
         raise RowError("quantity must be a positive number")
-    price = _number(raw, mapping, "price")
-    fees = _number(raw, mapping, "fees") or 0.0
+    price = _number(raw, mapping, "price", number_format)
+    fees = _number(raw, mapping, "fees", number_format) or 0.0
 
     asset_id = None
     if txn_type in ASSET_TRANSACTION_TYPES:

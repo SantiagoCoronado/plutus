@@ -1,5 +1,12 @@
 import { useState } from 'react'
-import { api, type Account, type CsvCommitResult, type CsvPreview } from '../../api/client'
+import {
+  api,
+  type Account,
+  type CsvCommitResult,
+  type CsvDateOrder,
+  type CsvNumberFormat,
+  type CsvPreview,
+} from '../../api/client'
 import {
   ErrorList,
   Field,
@@ -36,6 +43,8 @@ export default function CsvImportWizard({
   const [content, setContent] = useState('')
   const [preview, setPreview] = useState<CsvPreview | null>(null)
   const [mapping, setMapping] = useState<Record<string, string>>({})
+  const [numberFormat, setNumberFormat] = useState<CsvNumberFormat>('1,234.56')
+  const [dateOrder, setDateOrder] = useState<CsvDateOrder>('auto')
   const [result, setResult] = useState<CsvCommitResult | null>(null)
   const [errors, setErrors] = useState<ServerError[]>([])
   const [busy, setBusy] = useState(false)
@@ -53,6 +62,8 @@ export default function CsvImportWizard({
       const parsed = await api.csvPreview(content)
       setPreview(parsed)
       setMapping(parsed.suggested_mapping)
+      setNumberFormat(parsed.suggested_number_format)
+      setDateOrder(parsed.suggested_date_order)
     } catch (e) {
       setErrors(parseServerErrors(e))
     } finally {
@@ -67,7 +78,15 @@ export default function CsvImportWizard({
       const cleaned = Object.fromEntries(
         Object.entries(mapping).filter(([, column]) => column !== ''),
       )
-      setResult(await api.csvCommit({ account_id: accountId, content, mapping: cleaned }))
+      setResult(
+        await api.csvCommit({
+          account_id: accountId,
+          content,
+          mapping: cleaned,
+          number_format: numberFormat,
+          date_order: dateOrder,
+        }),
+      )
       onImported()
     } catch (e) {
       setErrors(parseServerErrors(e))
@@ -159,6 +178,29 @@ export default function CsvImportWizard({
                     </select>
                   </label>
                 ))}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="number format">
+                  <select
+                    value={numberFormat}
+                    onChange={(e) => setNumberFormat(e.target.value as CsvNumberFormat)}
+                    className={`${inputClass} w-full`}
+                  >
+                    <option value="1,234.56">1,234.56 (dot decimal)</option>
+                    <option value="1.234,56">1.234,56 (comma decimal)</option>
+                  </select>
+                </Field>
+                <Field label="date order">
+                  <select
+                    value={dateOrder}
+                    onChange={(e) => setDateOrder(e.target.value as CsvDateOrder)}
+                    className={`${inputClass} w-full`}
+                  >
+                    <option value="auto">auto (reject ambiguous dates)</option>
+                    <option value="dayfirst">day first (02/03 = March 2)</option>
+                    <option value="monthfirst">month first (02/03 = Feb 3)</option>
+                  </select>
+                </Field>
               </div>
               {preview.sample_rows.length > 0 && (
                 <div className="overflow-x-auto rounded border border-zinc-900">

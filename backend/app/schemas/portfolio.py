@@ -260,12 +260,18 @@ class CsvPreviewIn(BaseModel):
     content: str = Field(min_length=1)
 
 
+NumberFormat = Literal["1,234.56", "1.234,56"]
+DateOrder = Literal["auto", "dayfirst", "monthfirst"]
+
+
 class CsvPreviewOut(BaseModel):
     columns: list[str]
     sample_rows: list[dict[str, Any]]
     row_count: int
     preset: str | None
     suggested_mapping: dict[str, str]
+    suggested_number_format: NumberFormat
+    suggested_date_order: DateOrder
 
 
 class CsvCommitIn(BaseModel):
@@ -273,6 +279,8 @@ class CsvCommitIn(BaseModel):
     content: str = Field(min_length=1)
     mapping: dict[str, str]
     tz: str | None = None
+    number_format: NumberFormat = "1,234.56"
+    date_order: DateOrder = "auto"
 
 
 class CsvCommitOut(BaseModel):
