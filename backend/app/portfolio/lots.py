@@ -200,7 +200,8 @@ def _consume_specific(
     FIFO for the whole transaction (with a warning) rather than half-applying."""
     by_id = {lot.buy_transaction_id: lot for lot in lots}
     links = txn.lot_links or []
-    planned: list[tuple[Lot, float]] = []
+    # links naming the same lot are merged so oversell checks see the aggregate
+    planned: dict[int, float] = {}
     total = 0.0
     problem: str | None = None
 
@@ -209,16 +210,18 @@ def _consume_specific(
         quantity = float(link.get("quantity", 0))
         if lot is None:
             problem = f"lot {link.get('buy_transaction_id')} is not an open buy lot"
-        elif quantity <= EPSILON:
+            break
+        asked = planned.get(lot.buy_transaction_id, 0.0) + quantity
+        if quantity <= EPSILON:
             problem = "lot link quantity must be positive"
-        elif quantity > lot.remaining + EPSILON:
+        elif asked > lot.remaining + EPSILON:
             problem = (
                 f"lot {lot.buy_transaction_id} has {lot.remaining:g} remaining, "
-                f"link asks for {quantity:g}"
+                f"links ask for {asked:g}"
             )
         if problem:
             break
-        planned.append((lot, quantity))
+        planned[lot.buy_transaction_id] = asked
         total += quantity
 
     if problem is None and abs(total - txn.quantity) > EPSILON:
@@ -238,7 +241,8 @@ def _consume_specific(
         return _consume_fifo(state, txn, lots, strict=strict)
 
     matches = []
-    for lot, quantity in planned:
-        matches.append(LotMatch(lot.buy_transaction_id, quantity, lot.cost_per_unit))
+    for lot_id, quantity in planned.items():
+        lot = by_id[lot_id]
+        matches.append(LotMatch(lot_id, quantity, lot.cost_per_unit))
         lot.remaining -= quantity
     return matches

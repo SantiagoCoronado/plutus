@@ -145,6 +145,67 @@ class TestSpecificId:
         )
         assert state.realized[0].cost_basis == pytest.approx(2 * 100 + 4 * 200)
 
+    def test_duplicate_links_to_one_lot_cannot_oversell_in_strict_mode(self):
+        # each link alone fits the lot, but the aggregate is double what remains
+        txns = [
+            txn(1, "buy", 10, 100.0),
+            txn(
+                2,
+                "sell",
+                20,
+                150.0,
+                lot_links=[
+                    {"buy_transaction_id": 1, "quantity": 10},
+                    {"buy_transaction_id": 1, "quantity": 10},
+                ],
+            ),
+        ]
+        with pytest.raises(LotLinkError):
+            build_lots(txns, strict=True)
+
+    def test_duplicate_links_within_remaining_merge_into_one_match(self):
+        state = build_lots(
+            [
+                txn(1, "buy", 10, 100.0),
+                txn(
+                    2,
+                    "sell",
+                    6,
+                    150.0,
+                    lot_links=[
+                        {"buy_transaction_id": 1, "quantity": 2},
+                        {"buy_transaction_id": 1, "quantity": 4},
+                    ],
+                ),
+            ],
+            strict=True,
+        )
+        sale = state.realized[0]
+        assert len(sale.matches) == 1
+        assert sale.matches[0].quantity == pytest.approx(6.0)
+        assert sale.cost_basis == pytest.approx(600.0)
+        assert state.open_lots[(1, 1)][0].remaining == pytest.approx(4.0)
+
+    def test_links_across_two_lots_pass_strict_mode(self):
+        state = build_lots(
+            [
+                txn(1, "buy", 10, 100.0),
+                txn(2, "buy", 10, 200.0),
+                txn(
+                    3,
+                    "sell",
+                    6,
+                    150.0,
+                    lot_links=[
+                        {"buy_transaction_id": 1, "quantity": 2},
+                        {"buy_transaction_id": 2, "quantity": 4},
+                    ],
+                ),
+            ],
+            strict=True,
+        )
+        assert state.realized[0].cost_basis == pytest.approx(2 * 100 + 4 * 200)
+
     def test_invalid_link_falls_back_to_fifo_with_warning(self):
         state = build_lots(
             [
