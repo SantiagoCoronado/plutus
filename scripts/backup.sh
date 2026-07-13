@@ -41,6 +41,34 @@ seconds_until_backup() {
   echo "$delta"
 }
 
+record_heartbeat() {
+  # The hourly ops watchdog reads this app_settings row and alerts when it goes
+  # stale (>26h) — so a silently failing backup gets noticed. Never fails the
+  # dump: the heartbeat is telemetry, the dump is the product.
+  ts_iso=$(date -u '+%Y-%m-%dT%H:%M:%S+00:00')
+  PGPASSWORD="${PGPASSWORD:-}" psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" -q -c \
+    "INSERT INTO app_settings (key, value, is_secret) VALUES ('backup_last_success_at', '${ts_iso}', false) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now();" \
+    || log "WARN: could not record backup heartbeat"
+}
+
+copy_offhost() {
+  # Optional off-host copy: dumps on the same box as pgdata don't survive a dead
+  # disk. Unset BACKUP_REMOTE = skip with a log line, never an error.
+  if [ -z "${BACKUP_REMOTE:-}" ]; then
+    log "off-host copy skipped (BACKUP_REMOTE unset)"
+    return 0
+  fi
+  if ! command -v rclone >/dev/null 2>&1; then
+    log "WARN: BACKUP_REMOTE is set but rclone is not in this image — see README (Backups)"
+    return 0
+  fi
+  if rclone copy "$1" "$BACKUP_REMOTE" --config "${RCLONE_CONFIG:-/backups/rclone.conf}" 2>&1; then
+    log "off-host copy ok -> ${BACKUP_REMOTE}"
+  else
+    log "WARN: off-host copy failed (rclone exit $?); local dump is intact"
+  fi
+}
+
 run_dump() {
   ts=$(date +%Y%m%d_%H%M)
   final="$BACKUP_DIR/plutus_${ts}.dump"
@@ -54,6 +82,8 @@ run_dump() {
     mv "$tmp" "$final"
     size=$(du -h "$final" | cut -f1)
     log "ok: ${final} (${size})"
+    record_heartbeat
+    copy_offhost "$final"
   else
     rc=$?
     rm -f "$tmp"
