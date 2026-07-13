@@ -22,13 +22,19 @@ from app.quotes.subscriptions import SubscriptionState, read_state
 log = get_logger(__name__)
 
 RECONCILE_INTERVAL_S = 30
+# liveness beacon: refreshed every reconcile tick, read by the compose
+# healthcheck and the hourly watchdog. TTL > 2 ticks so one slow cycle
+# doesn't flap the container unhealthy.
+HEARTBEAT_KEY = "quotes:heartbeat"
+HEARTBEAT_TTL_S = 120
 
 
-async def _reconcile_loop(state: SubscriptionState, stop: asyncio.Event) -> None:
+async def _reconcile_loop(redis, state: SubscriptionState, stop: asyncio.Event) -> None:
     while not stop.is_set():
         try:
             symbols, pairs = await asyncio.to_thread(read_state)
             state.update(symbols, pairs)
+            await redis.setex(HEARTBEAT_KEY, HEARTBEAT_TTL_S, "1")
             log.info("quotes.reconciled", symbols=len(symbols), pairs=len(pairs))
         except asyncio.CancelledError:
             raise
@@ -66,7 +72,7 @@ async def run() -> None:
     log.info("quotes.streamer_start")
     try:
         async with asyncio.TaskGroup() as tg:
-            tg.create_task(_reconcile_loop(state, stop))
+            tg.create_task(_reconcile_loop(redis, state, stop))
             tg.create_task(consumer.run())
             tg.create_task(poller.run())
             await stop.wait()

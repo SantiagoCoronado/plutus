@@ -1,5 +1,13 @@
 name: plutus
 
+# json-file rotation everywhere: the worker at -l info plus per-minute beat
+# ticks generate constant output; unbounded logs eventually eat the disk
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 x-backend-env: &backend-env
   # Inside the compose network, db/redis hostnames replace the localhost values from .env
   DATABASE_URL: postgresql://plutus:${POSTGRES_PASSWORD:-plutus}@db:5432/plutus
@@ -15,6 +23,8 @@ services:
   db:
     # Community (TSL) image — the -oss variant lacks compression, never switch to it
     image: timescale/timescaledb:2.28.2-pg16
+    restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: plutus
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-plutus}
@@ -33,6 +43,8 @@ services:
 
   redis:
     image: redis:8.0-alpine
+    restart: unless-stopped
+    logging: *default-logging
     # requirepass is mandatory: redis is the Celery broker — unauthenticated
     # access means arbitrary task execution. Password lives in .env.
     command: sh -c 'exec redis-server --requirepass "$$REDIS_PASSWORD"'
@@ -48,6 +60,8 @@ services:
 
   app:
     build: ./backend
+    restart: unless-stopped
+    logging: *default-logging
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
     env_file: .env
     environment: *backend-env
@@ -74,6 +88,8 @@ services:
 
   worker:
     build: ./backend
+    restart: unless-stopped
+    logging: *default-logging
     command: celery -A worker.celery_app worker -l info --concurrency=2
     env_file: .env
     environment: *backend-env
@@ -84,20 +100,38 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      # a hung worker looks identical to a healthy one from outside — ask celery
+      test: ["CMD-SHELL", "celery -A worker.celery_app inspect ping -d celery@$$(hostname) -t 10 | grep -q pong"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
 
   beat:
     build: ./backend
+    restart: unless-stopped
+    logging: *default-logging
     command: celery -A worker.celery_app beat -l info --schedule /tmp/celerybeat-schedule
     env_file: .env
     environment: *backend-env
     depends_on:
       worker:
         condition: service_started
+    healthcheck:
+      # beat syncs its schedule file every ~3 min; a stale file means the
+      # scheduler is wedged even though the process is alive
+      test: ["CMD-SHELL", "[ -n \"$$(find /tmp -name 'celerybeat-schedule*' -mmin -15 2>/dev/null)\" ]"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
 
   # live-quote streamer (Phase 7 M3): persistent Binance WS + poller fan-out over
   # Redis pub/sub. Not a Celery task — a long-running WS consumer doesn't fit beat.
   quotes:
     build: ./backend
+    logging: *default-logging
     command: python -m app.quotes.streamer
     env_file: .env
     environment: *backend-env
@@ -107,6 +141,18 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      # the reconcile loop refreshes quotes:heartbeat (TTL 120s) every ~30s;
+      # its absence means the streamer is wedged, whatever the process says
+      test:
+        - CMD
+        - python
+        - -c
+        - "import sys; from app.providers.registry import _shared_redis; sys.exit(0 if _shared_redis().get('quotes:heartbeat') else 1)"
+      interval: 30s
+      timeout: 10s
+      retries: 4
+      start_period: 90s
 
   # nightly database backup sidecar (Phase 7 M7). Uses the SAME image as `db` so
   # pg_dump's version and TimescaleDB extension awareness match the server — a
@@ -116,6 +162,7 @@ services:
   # never passed to the script as an argument.
   backup:
     image: timescale/timescaledb:2.28.2-pg16
+    logging: *default-logging
     entrypoint: ["/bin/sh", "/backup.sh"]
     command: []
     environment:
@@ -123,6 +170,8 @@ services:
       POSTGRES_USER: plutus
       POSTGRES_DB: plutus
       TZ: ${TZ:-America/Mexico_City}
+      # optional rclone destination (e.g. "b2:plutus-backups"); unset = local only
+      BACKUP_REMOTE: ${BACKUP_REMOTE:-}
     volumes:
       - ./scripts/backup.sh:/backup.sh:ro
       - backups:/backups
@@ -138,6 +187,8 @@ services:
   # billing from subscription to API; the server also deletes it defensively).
   agent-sidecar:
     build: ./sidecar
+    restart: unless-stopped
+    logging: *default-logging
     environment:
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       PLUTUS_API_URL: http://app:8000
@@ -158,6 +209,24 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
+
+  # production UI (spec phase 10 M5): built SPA behind nginx, proxying
+  # /api + /health + /ws to app — one origin, no dev server, no CORS.
+  # `npm run dev` on :5173 remains the dev flow.
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "127.0.0.1:8080:80"
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:80/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
 volumes:
   pgdata:
