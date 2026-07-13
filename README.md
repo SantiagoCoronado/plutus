@@ -31,13 +31,16 @@ cp .env.example .env        # set APP_AUTH_TOKEN to something long and random
                             # FMP_API_KEY (fundamentals), FINNHUB_API_KEY (news);
                             # Binance + CoinGecko need no keys
 
-docker compose up --build -d      # db + redis + api + worker + beat + quotes + backup + agent-sidecar
+docker compose up --build -d      # db + redis + api + worker + beat + quotes + backup + agent-sidecar + web
 make seed                         # track AAPL, BTC, EURUSD + SPY/QQQ/UUP/ETH benchmarks & strip
 make ingest                       # seed + pull daily candles inline (or POST /api/v1/ingestion/run)
 cd backend && uv run python -m app.ingestion.universe   # optional: ~100 large caps + top crypto,
                                   # 5y backfill (paced by rate limits, ~2h; resumable)
-cd frontend && npm install && npm run dev   # research UI on :5173
 ```
+
+UI: <http://localhost:8080> — the `web` service serves the built frontend behind
+nginx (same-origin proxy to the API; no dev server needed). For frontend work,
+`cd frontend && npm install && npm run dev` still runs Vite on :5173.
 
 API: <http://localhost:8800> (OpenAPI docs at `/api/docs`, health at `/health`).
 All `/api/v1/*` endpoints require `Authorization: Bearer $APP_AUTH_TOKEN`.
@@ -255,6 +258,14 @@ make backup-now     # take a dump right now (stack must be up)
 make backup-list    # list dumps in the backups volume
 ```
 
+Every successful dump records a heartbeat (`app_settings.backup_last_success_at`);
+the hourly ops watchdog emails/Telegrams when it goes stale (>26 h) — a silently
+failing backup gets noticed. **Off-host copies**: set `BACKUP_REMOTE` (an rclone
+destination, e.g. `b2:plutus-backups`) and provide rclone + its config in the
+backup container (mount a config at `/backups/rclone.conf`); unset means local
+volume only, logged as a skip. Dumps share a disk with `pgdata` — off-host is
+what survives a dead drive.
+
 **Restore.** TimescaleDB needs a pre/post-restore dance, and the restore must use the
 same timescaledb image/version the dump was taken with. `make restore` verifies a dump
 by restoring it into a throwaway `plutus_restore_check` database — the live `plutus`
@@ -288,7 +299,14 @@ SELECT timescaledb_post_restore();
   compute indicators on resampled bars (Timescale `time_bucket`, computed on read).
 - **Benchmarks are ordinary tracked assets** (SPY / BTC / UUP — raw DXY is paid-gated on
   Twelve Data free; `BENCHMARK_FOREX` is env-swappable).
-- **redis-py is pinned `<6.5`** — kombu (Celery transport) requires it; do not bump.
+- **redis-py is pinned `<6.5`** — kombu (Celery transport) requires it; do not bump
+  (re-check the cap whenever Celery/kombu is bumped — Dependabot will propose it).
+- **Redis state is deliberately ephemeral** (no volume, no AOF): queued Celery jobs
+  and the live-quote cache vanish on restart. Everything durable lives in Postgres;
+  beat re-enqueues scheduled work and the streamer repopulates quotes within a minute.
+- **Ops watchdog** (hourly beat): ingestion red, silent quote streamer, or stale
+  backup → one email/Telegram per issue per day. Any Celery task failure also
+  notifies once per (task, day) via the `task_failure` signal.
 - **DB image must stay `timescale/timescaledb` (TSL)** — the `-oss` variant lacks compression.
 - Rate limits are enforced client-side: Redis token bucket + hard daily/monthly budgets at
   ~90% of each provider's free tier, plus response caching (bars 12h, quotes 30–60s,
