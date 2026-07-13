@@ -15,6 +15,14 @@ def create_app() -> FastAPI:
     settings = get_settings()
     if not settings.app_auth_token:
         raise RuntimeError("APP_AUTH_TOKEN must be set — see .env.example")
+    if ":plutus@" in settings.database_url:
+        # loud, repeated-at-every-boot nudge; not fatal so a fresh checkout still runs
+        from app.core.logging import get_logger
+
+        get_logger(__name__).warning(
+            "SECURITY: the database still uses the default password 'plutus' — "
+            "set a real POSTGRES_PASSWORD in .env (and update DATABASE_URL)"
+        )
 
     app = FastAPI(
         title="Plutus",

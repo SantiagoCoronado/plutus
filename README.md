@@ -43,7 +43,12 @@ API: <http://localhost:8800> (OpenAPI docs at `/api/docs`, health at `/health`).
 All `/api/v1/*` endpoints require `Authorization: Bearer $APP_AUTH_TOKEN`.
 
 > Ports: the API maps to host **8800** and Postgres to **5433** to avoid clashing with
-> other local stacks. Inside the compose network they remain 8000/5432.
+> other local stacks. Inside the compose network they remain 8000/5432. All published
+> ports bind to **127.0.0.1 only** — nothing in the stack is reachable from the LAN.
+> Redis requires `REDIS_PASSWORD`, the agent sidecar requires `SIDECAR_SHARED_SECRET`
+> (both in `.env`; the sidecar has no published port at all), and the live-quote
+> websocket authenticates with a single-use 30-second ticket from
+> `POST /api/v1/ws-ticket` instead of the bearer token.
 
 ### Dev mode (fast iteration)
 

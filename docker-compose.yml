@@ -3,7 +3,7 @@ name: plutus
 x-backend-env: &backend-env
   # Inside the compose network, db/redis hostnames replace the localhost values from .env
   DATABASE_URL: postgresql://plutus:${POSTGRES_PASSWORD:-plutus}@db:5432/plutus
-  REDIS_URL: redis://redis:6379/0
+  REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (openssl rand -hex 24)}@redis:6379/0
   # shared volume: the worker writes quantstats reports, the API serves them
   ARTIFACTS_DIR: /srv/artifacts
   # the claude-subscription provider's sidecar (see the agent-sidecar service).
@@ -20,8 +20,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-plutus}
       POSTGRES_DB: plutus
     ports:
-      # host 5433 (5432 is commonly taken by other local stacks); in-network stays db:5432
-      - "5433:5432"
+      # host 5433 (5432 is commonly taken by other local stacks); in-network stays db:5432.
+      # Loopback-only: nothing in this stack belongs on the LAN (spec phase 9 M1).
+      - "127.0.0.1:5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -32,10 +33,15 @@ services:
 
   redis:
     image: redis:8.0-alpine
+    # requirepass is mandatory: redis is the Celery broker — unauthenticated
+    # access means arbitrary task execution. Password lives in .env.
+    command: sh -c 'exec redis-server --requirepass "$$REDIS_PASSWORD"'
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (openssl rand -hex 24)}
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -47,7 +53,7 @@ services:
     environment: *backend-env
     ports:
       # host 8800 (8000 is commonly taken by other local stacks); in-container stays 8000
-      - "8800:8000"
+      - "127.0.0.1:8800:8000"
     volumes:
       - artifacts:/srv/artifacts
     depends_on:
@@ -136,10 +142,13 @@ services:
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       PLUTUS_API_URL: http://app:8000
       PLUTUS_API_TOKEN: ${APP_AUTH_TOKEN}
+      # fail-closed: the sidecar refuses to boot without this and 401s any
+      # request that doesn't present it (it holds both tokens above)
+      SIDECAR_SHARED_SECRET: ${SIDECAR_SHARED_SECRET:-}
       PORT: "8787"
-    ports:
-      # exposed for native-dev backends (CLAUDE_SIDECAR_URL=http://localhost:8787)
-      - "8787:8787"
+    # No published port (spec phase 9 M1): only the app reaches it in-network.
+    # For a natively-run backend, add a compose override publishing
+    # "127.0.0.1:8787:8787" and set CLAUDE_SIDECAR_URL=http://localhost:8787.
     healthcheck:
       test:
         - CMD

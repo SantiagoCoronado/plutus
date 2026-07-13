@@ -5,12 +5,30 @@ Keep app.core.db imports out of unit-test module scope so this ordering holds.
 """
 
 import os
+from pathlib import Path
 
 # --- must run before app imports ---------------------------------------------
 TEST_DB_NAME = "plutus_test"
 TEST_DB_URL = f"postgresql://plutus:plutus@localhost:5433/{TEST_DB_NAME}"
 ADMIN_DB_URL = "postgresql+psycopg://plutus:plutus@localhost:5433/plutus"
-TEST_REDIS_URL = "redis://localhost:6379/1"
+
+
+def _redis_password() -> str:
+    """The compose redis requires a password (phase 9 M3); read it the way the
+    app would — env first, then the root .env — without importing app config
+    (which must not load before this module pins the environment)."""
+    if os.environ.get("REDIS_PASSWORD"):
+        return os.environ["REDIS_PASSWORD"]
+    for env_path in (Path(".env"), Path("../.env")):
+        if env_path.exists():
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                if line.startswith("REDIS_PASSWORD="):
+                    return line.split("=", 1)[1].strip()
+    return ""
+
+
+_REDIS_AUTH = f":{_redis_password()}@" if _redis_password() else ""
+TEST_REDIS_URL = f"redis://{_REDIS_AUTH}localhost:6379/1"
 TEST_TOKEN = "integration-test-token"
 
 os.environ["DATABASE_URL"] = TEST_DB_URL
@@ -42,7 +60,6 @@ os.environ["OPENROUTER_API_KEY"] = ""
 # ------------------------------------------------------------------------------
 
 import json
-from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
