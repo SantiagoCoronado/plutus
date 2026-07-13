@@ -15,7 +15,7 @@ dependencies = [
     "redis>=6.2,<6.5",
     "httpx==0.28.1",
     "pandas>=2.2,<3.0",
-    "structlog>=25.4,<26",
+    "structlog>=25.4,<27",
     "pandas-ta-classic>=0.6.52",
     "vectorbt==1.0.0",
     "backtrader==1.9.78.123",
