@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     # an fx close older than this converts with a stale warning instead of silently
     fx_max_stale_days: int = 7
 
+    # app <-> agent-sidecar shared secret (phase 9 M2). The sidecar refuses to
+    # boot without it and 401s any request that doesn't present it.
+    sidecar_shared_secret: str = ""
+
     # --- AI agent layer (spec §13) — env values are the seed; app_settings rows
     # (Settings UI) override them so the provider can switch without a restart.
     llm_provider: str = "claude-subscription"

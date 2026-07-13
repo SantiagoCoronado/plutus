@@ -9,6 +9,7 @@
 // environment it would silently switch billing from subscription to API.
 
 import { createServer } from 'node:http'
+import { timingSafeEqual } from 'node:crypto'
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import { buildPlutusServer } from './tools.mjs'
 
@@ -17,6 +18,17 @@ delete process.env.ANTHROPIC_API_KEY
 const PORT = Number(process.env.PORT ?? 8787)
 const PLUTUS_API_URL = process.env.PLUTUS_API_URL ?? 'http://localhost:8800'
 const PLUTUS_API_TOKEN = process.env.PLUTUS_API_TOKEN ?? ''
+// Fail-closed inbound auth (spec phase 9 M2): this process holds the Claude
+// OAuth token AND the hub API token, so every request except /health must
+// present the shared secret. No secret -> refuse to boot at all.
+const SHARED_SECRET = process.env.SIDECAR_SHARED_SECRET ?? ''
+
+export function authorized(header, secret = SHARED_SECRET) {
+  if (!secret) return false
+  const presented = Buffer.from(String(header ?? ''))
+  const expected = Buffer.from(`Bearer ${secret}`)
+  return presented.length === expected.length && timingSafeEqual(presented, expected)
+}
 
 // the CLI's built-in tools have no business in a research hub with its own registry
 const DISALLOWED_TOOLS = [
@@ -132,6 +144,11 @@ const server = createServer(async (req, res) => {
     )
     return
   }
+  if (!authorized(req.headers.authorization)) {
+    res.writeHead(401, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ error: 'missing or invalid sidecar shared secret' }))
+    return
+  }
   if (req.method === 'POST' && req.url === '/chat/stream') {
     await handleChatStream(req, res)
     return
@@ -143,6 +160,13 @@ const server = createServer(async (req, res) => {
 // node --test imports this module to verify the API-key strip; don't hold its
 // event loop open with a live listener
 if (!process.env.NODE_TEST_CONTEXT) {
+  if (!SHARED_SECRET) {
+    console.error(
+      'SIDECAR_SHARED_SECRET is not set — refusing to start. Generate one with ' +
+        '`openssl rand -hex 32` and put it in .env (the backend sends it on every request).',
+    )
+    process.exit(1)
+  }
   server.listen(PORT, () => {
     console.log(
       `plutus agent sidecar on :${PORT} (auth: ${

@@ -33,10 +33,28 @@ KNOWN_EVENTS = frozenset(
 class ClaudeSidecarProvider(AgentLoopProvider):
     name = "claude-subscription"
 
-    def __init__(self, *, base_url: str, model: str = "", timeout: float = 600.0) -> None:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        model: str = "",
+        timeout: float = 600.0,
+        shared_secret: str | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout = timeout
+        if shared_secret is None:
+            from app.core.config import get_settings
+
+            shared_secret = get_settings().sidecar_shared_secret
+        self.shared_secret = shared_secret
+
+    def _headers(self) -> dict[str, str]:
+        # the sidecar is fail-closed: every request except /health needs the secret
+        if not self.shared_secret:
+            return {}
+        return {"Authorization": f"Bearer {self.shared_secret}"}
 
     async def health(self) -> dict:
         try:
@@ -71,8 +89,16 @@ class ClaudeSidecarProvider(AgentLoopProvider):
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 async with client.stream(
-                    "POST", f"{self.base_url}/chat/stream", json=body
+                    "POST",
+                    f"{self.base_url}/chat/stream",
+                    json=body,
+                    headers=self._headers(),
                 ) as response:
+                    if response.status_code == 401:
+                        raise LLMError(
+                            "sidecar rejected the shared secret — set the same "
+                            "SIDECAR_SHARED_SECRET for the app and agent-sidecar services"
+                        )
                     if response.status_code != 200:
                         detail = (await response.aread()).decode()[:300]
                         raise LLMError(f"sidecar returned {response.status_code}: {detail}")

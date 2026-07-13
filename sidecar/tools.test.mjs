@@ -32,3 +32,15 @@ test('LCD JSON schema converts to a zod shape with required/optional split', () 
     nested: { anything: 1 },
   })
 })
+
+test('sidecar auth: fail-closed shared-secret check', async () => {
+  const { authorized } = await import('./server.mjs')
+  // no secret configured -> nothing is authorized, ever
+  assert.equal(authorized('Bearer anything', ''), false)
+  assert.equal(authorized('', ''), false)
+  // exact match required, timing-safe
+  assert.equal(authorized('Bearer s3cret', 's3cret'), true)
+  assert.equal(authorized('Bearer wrong', 's3cret'), false)
+  assert.equal(authorized('s3cret', 's3cret'), false) // missing Bearer prefix
+  assert.equal(authorized(undefined, 's3cret'), false)
+})
