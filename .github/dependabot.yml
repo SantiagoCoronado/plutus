@@ -1,0 +1,28 @@
+# Phase 10 M2: weekly bump PRs. NOTE the load-bearing pins before merging any
+# of these — redis-py must stay <6.5 (kombu), websockets <16, and the DB image
+# must remain timescale/timescaledb (TSL, never -oss). CI has to pass anyway.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: /sidecar
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

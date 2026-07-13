@@ -1,0 +1,32 @@
+# Weekly dependency-vulnerability sweep (Phase 10 M2). Informational by design:
+# a Monday-morning finding should page a human, not block unrelated merges.
+name: audit
+
+on:
+  schedule:
+    - cron: "0 14 * * 1" # Mondays 14:00 UTC ≈ 08:00 America/Mexico_City
+  workflow_dispatch:
+
+jobs:
+  pip-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: pip-audit (backend lockfile)
+        run: |
+          cd backend
+          uv export --frozen --no-emit-project -o requirements.txt
+          uvx pip-audit -r requirements.txt --disable-pip
+
+  npm-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: npm audit (frontend)
+        run: cd frontend && npm audit --audit-level=high
+      - name: npm audit (sidecar)
+        run: cd sidecar && npm audit --audit-level=high

@@ -1,0 +1,78 @@
+# Phase 10 M2: every push/PR runs lint, the unit suite, the no-execution guard,
+# and the full migration chain against a real TimescaleDB — the invariants that
+# previously only held when someone remembered to type `make ...`.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: timescale/timescaledb:2.28.2-pg16
+        env:
+          POSTGRES_USER: plutus
+          POSTGRES_PASSWORD: plutus
+          POSTGRES_DB: plutus
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U plutus -d plutus"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Sync dependencies
+        run: cd backend && uv sync --frozen
+      - name: Lint
+        run: make lint
+      - name: No-execution guard
+        run: make guard-tasa
+      - name: Unit tests
+        run: make test
+      - name: Migrations apply cleanly (0001 → head)
+        env:
+          DATABASE_URL: postgresql://plutus:plutus@localhost:5433/plutus
+          APP_AUTH_TOKEN: ci-only-token
+          REDIS_URL: redis://localhost:6379/0
+        run: cd backend && uv run alembic upgrade head
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install
+        run: cd frontend && npm ci
+      - name: Typecheck
+        run: cd frontend && npm run typecheck
+      - name: Lint
+        run: cd frontend && npm run lint
+      - name: Build
+        run: cd frontend && npm run build
+
+  sidecar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: sidecar/package-lock.json
+      - name: Install
+        run: cd sidecar && npm ci
+      - name: Tests (auth + schema shape)
+        run: cd sidecar && npm test
