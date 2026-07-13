@@ -88,6 +88,13 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=3, minute=40),
         "options": {"expires": 6 * 3600},
     },
+    # hourly ops watchdog: pushes ingestion-red / silent-streamer / stale-backup
+    # notifications through the alert channels, deduped per issue per day
+    "ops-watchdog": {
+        "task": "worker.tasks.run_ops_watchdog",
+        "schedule": crontab(minute=7),
+        "options": {"expires": 55 * 60},
+    },
     # fire armed price alerts on a threshold crossing — reads the live quote cache.
     # expires < the minute cadence: a worker backlog drops stale duplicates
     # instead of replaying them (the Redis lock is the second line of defense)

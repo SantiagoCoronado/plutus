@@ -21,7 +21,10 @@ SCAN_STATUSES = ("queued", "running", "done", "failed")
 CANDIDATE_STATUSES = ("new", "reviewed", "starred", "dismissed")
 NOTIFY_MODES = ("off", "instant", "digest")
 NOTIFICATION_CHANNELS = ("email", "telegram")
-NOTIFICATION_KINDS = ("instant", "digest", "test", "maturity", "memo", "price_alert")
+NOTIFICATION_KINDS = (
+    "instant", "digest", "test", "maturity", "memo", "price_alert",
+    "task_failure", "watchdog",
+)
 
 
 class Mandate(Base):
@@ -145,7 +148,8 @@ class Notification(Base):
     __table_args__ = (
         CheckConstraint("channel IN ('email','telegram')", name="ck_notifications_channel"),
         CheckConstraint(
-            "kind IN ('instant','digest','test','maturity','memo','price_alert')",
+            "kind IN ('instant','digest','test','maturity','memo','price_alert',"
+            "'task_failure','watchdog')",
             name="ck_notifications_kind",
         ),
         Index("ix_notifications_sent_at", "sent_at"),

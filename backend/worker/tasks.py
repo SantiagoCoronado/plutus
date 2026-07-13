@@ -1,9 +1,43 @@
+from celery.signals import task_failure
+
 from app.core.logging import configure_logging, get_logger
 from app.ingestion.eod import run_asset_backfill, run_eod_all, run_eod_ingestion
 from worker.celery_app import celery_app
 
 configure_logging()
 log = get_logger(__name__)
+
+
+@task_failure.connect
+def _notify_task_failure(sender=None, exception=None, **_kwargs):
+    """Push one email/Telegram per (task, day) when any task raises (spec phase
+    10 M3). Structured logs already record the traceback; this makes sure a
+    failing nightly job is *pushed* at you instead of waiting to be noticed on
+    the Settings page. Never raises — a broken channel must not mask the
+    original failure or re-fail the task."""
+    task_name = getattr(sender, "name", str(sender))
+    try:
+        from datetime import UTC, datetime
+
+        from app.core.db import session_scope
+        from app.discovery.notify import deliver
+        from app.providers.registry import _shared_redis
+
+        dedup_key = f"notify:task_failure:{task_name}:{datetime.now(UTC):%Y%m%d}"
+        if not _shared_redis().set(dedup_key, "1", nx=True, ex=86400):
+            return
+        detail = f"{type(exception).__name__}: {exception}"[:500]
+        with session_scope() as session:
+            deliver(
+                session,
+                "task_failure",
+                f"Task failed: {task_name}",
+                f"{detail}\n\nFurther failures of this task today are logged but "
+                "not re-notified. See the worker logs for the traceback.",
+                {"task": task_name},
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("task_failure_notify_failed", task=task_name, error=str(exc))
 
 # Ingestion tasks sleep inside the provider token bucket (Tiingo ~80s/symbol at
 # ~100 stocks ≈ 2.3h/night) — they need far more than the global 30-min limit.
@@ -182,3 +216,14 @@ def sync_exchange_nightly() -> list[int]:
     from app.exchanges.sync import sync_all_bitso_accounts
 
     return sync_all_bitso_accounts()
+
+
+@celery_app.task(name="worker.tasks.run_ops_watchdog", time_limit=120, soft_time_limit=100)
+def run_ops_watchdog() -> dict:
+    """Hourly beat: notify (deduped per issue per day) when ingestion goes red,
+    the quote streamer stops heartbeating, or backups go stale."""
+    from app.core.db import session_scope
+    from app.health.watchdog import run_watchdog
+
+    with session_scope() as session:
+        return run_watchdog(session)
