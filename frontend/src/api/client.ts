@@ -1239,6 +1239,9 @@ export const api = {
     request<{ task_id: string; status: string }>(`/exchanges/${accountId}/resync`, {
       method: 'POST',
     }),
+  // single-use 30s websocket ticket — minted per (re)connect by ws.ts
+  wsTicket: () =>
+    request<{ ticket: string; expires_in: number }>('/ws-ticket', { method: 'POST' }),
 
   // --- ingestion health (Phase 7) ---
   ingestionHealth: () => request<IngestionHealth>('/health/ingestion'),

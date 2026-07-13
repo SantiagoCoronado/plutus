@@ -21,6 +21,7 @@ from app.api.routes import (
     transactions,
     translations,
     watchlists,
+    ws_quotes,
 )
 
 api_router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_auth)])
@@ -43,6 +44,7 @@ api_router.include_router(translations.router)
 api_router.include_router(alerts.router)
 api_router.include_router(exchanges.router)
 api_router.include_router(health.router)
+api_router.include_router(ws_quotes.router)
 
 
 @api_router.get("/ping", tags=["meta"])

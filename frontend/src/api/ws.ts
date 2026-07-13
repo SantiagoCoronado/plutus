@@ -1,4 +1,4 @@
-import { getToken } from './client'
+import { api } from './client'
 
 export interface Tick {
   symbol: string
@@ -19,8 +19,10 @@ const BACKOFF_START_MS = 1000
 const BACKOFF_MAX_MS = 15000
 
 /** Open one live-quote websocket to /ws/quotes. Sibling of sse.ts; the browser
- * can't send the bearer header on a websocket, so the token rides as ?token=.
- * Auto-reconnects with capped backoff and re-subscribes on reopen. */
+ * can't send the bearer header on a websocket, so each (re)connect first mints
+ * a 30s single-use ticket over the authed REST API and rides it as ?ticket= —
+ * the long-lived token never lands in a URL. Auto-reconnects with capped
+ * backoff and re-subscribes on reopen. */
 export function openQuoteStream(
   symbols: string[],
   onTick: (tick: Tick) => void,
@@ -38,10 +40,25 @@ export function openQuoteStream(
     }
   }
 
-  const connect = () => {
+  const scheduleReconnect = () => {
+    if (closedByUser) return
+    reconnectTimer = setTimeout(connect, backoff)
+    backoff = Math.min(backoff * 2, BACKOFF_MAX_MS)
+  }
+
+  const connect = async () => {
+    let ticket: string
+    try {
+      ticket = (await api.wsTicket()).ticket
+    } catch {
+      // token invalid or API down — same treatment as a dropped socket
+      onStatus?.('error')
+      scheduleReconnect()
+      return
+    }
+    if (closedByUser) return
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const token = getToken()
-    const url = `${proto}//${window.location.host}/ws/quotes?token=${encodeURIComponent(token)}`
+    const url = `${proto}//${window.location.host}/ws/quotes?ticket=${encodeURIComponent(ticket)}`
     ws = new WebSocket(url)
 
     ws.onopen = () => {
@@ -68,13 +85,11 @@ export function openQuoteStream(
     ws.onerror = () => onStatus?.('error')
     ws.onclose = () => {
       onStatus?.('closed')
-      if (closedByUser) return
-      reconnectTimer = setTimeout(connect, backoff)
-      backoff = Math.min(backoff * 2, BACKOFF_MAX_MS)
+      scheduleReconnect()
     }
   }
 
-  connect()
+  void connect()
 
   return {
     close() {

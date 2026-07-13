@@ -1,10 +1,13 @@
 """Browser-facing live-quote websocket: `WS /ws/quotes`.
 
 Mounted on the raw app (NOT under api_router — the bearer Depends can't run for a
-websocket handshake). Auth is a `?token=` query param compared against
-APP_AUTH_TOKEN. After a `{"action":"subscribe","symbols":[...]}` frame the server
-replays the current last quotes for those symbols, then forwards matching ticks
-from the shared Redis pub/sub channel, sending a heartbeat when idle.
+websocket handshake). Auth is a single-use short-TTL ticket: the browser calls
+`POST /api/v1/ws-ticket` (bearer-authenticated) and connects with `?ticket=`,
+so the long-lived APP_AUTH_TOKEN never rides in a URL where proxy logs and
+browser history would capture it (spec phase 9 M4). After a
+`{"action":"subscribe","symbols":[...]}` frame the server replays the current
+last quotes for those symbols, then forwards matching ticks from the shared
+Redis pub/sub channel, sending a heartbeat when idle.
 """
 
 from __future__ import annotations
@@ -14,7 +17,7 @@ import json
 import secrets
 
 import redis.asyncio as aioredis
-from fastapi import WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -24,11 +27,27 @@ log = get_logger(__name__)
 
 HEARTBEAT_S = 20
 CLOSE_UNAUTHORIZED = 4401
+TICKET_PREFIX = "ws:ticket:"
+TICKET_TTL_S = 30
+
+router = APIRouter(tags=["quotes"])
 
 
-def _authorized(token: str) -> bool:
-    expected = get_settings().app_auth_token
-    return bool(expected) and secrets.compare_digest(token, expected)
+@router.post("/ws-ticket")
+def mint_ws_ticket():
+    """Single-use websocket ticket (30s TTL). Sits under the bearer-auth'd
+    api_router; consuming it is GETDEL, so a replayed ticket is rejected."""
+    from app.providers.registry import _shared_redis
+
+    ticket = secrets.token_urlsafe(24)
+    _shared_redis().setex(f"{TICKET_PREFIX}{ticket}", TICKET_TTL_S, "1")
+    return {"ticket": ticket, "expires_in": TICKET_TTL_S}
+
+
+async def _consume_ticket(redis, ticket: str) -> bool:
+    if not ticket:
+        return False
+    return await redis.getdel(f"{TICKET_PREFIX}{ticket}") is not None
 
 
 def _parse_subscribe(raw: str, current: set[str]) -> set[str]:
@@ -52,13 +71,13 @@ async def _replay(websocket: WebSocket, redis, symbols: set[str]) -> None:
 
 
 async def quotes_ws(websocket: WebSocket) -> None:
-    if not _authorized(websocket.query_params.get("token", "")):
+    redis = aioredis.Redis.from_url(get_settings().redis_url, decode_responses=True)
+    if not await _consume_ticket(redis, websocket.query_params.get("ticket", "")):
         await websocket.accept()
         await websocket.close(code=CLOSE_UNAUTHORIZED)
+        await redis.aclose()
         return
     await websocket.accept()
-
-    redis = aioredis.Redis.from_url(get_settings().redis_url, decode_responses=True)
     pubsub = redis.pubsub()
     await pubsub.subscribe(CHANNEL)
 
