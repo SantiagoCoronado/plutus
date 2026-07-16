@@ -96,7 +96,7 @@ export default function CsvImportWizard({
   }
 
   return (
-    <Modal title="Import transactions from CSV" onClose={onClose} wide>
+    <Modal title="Import transactions from CSV" onClose={onClose} wide guardClose>
       {result === null ? (
         <>
           <div className="grid grid-cols-2 gap-3">

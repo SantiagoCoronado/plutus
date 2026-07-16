@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import { ApiError } from '../../api/client'
 
 export const inputClass =
@@ -35,19 +35,43 @@ export function Modal({
   onClose,
   children,
   wide,
+  guardClose = false,
 }: {
   title: string
   onClose: () => void
   children: ReactNode
   wide?: boolean
+  /** when the modal holds unsaved work (CSV mapping mid-import), a stray
+   * backdrop click must not discard it — only Escape/the explicit close ask */
+  guardClose?: boolean
 }) {
+  const panelRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement as HTMLElement | null
+    panelRef.current?.focus()
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      previouslyFocused?.focus()
+    }
+  }, [onClose])
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 py-10"
-      onClick={onClose}
+      onClick={guardClose ? undefined : onClose}
     >
       <div
-        className={`${wide ? 'w-[680px]' : 'w-[560px]'} space-y-4 rounded-lg border border-zinc-700 bg-zinc-950 p-5`}
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+        className={`${wide ? 'w-[680px]' : 'w-[560px]'} space-y-4 rounded-lg border border-zinc-700 bg-zinc-950 p-5 focus:outline-none`}
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="text-base font-semibold">{title}</h2>
