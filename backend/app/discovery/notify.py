@@ -178,6 +178,12 @@ def send_digest() -> int:
 
     session = SessionLocal()
     try:
+        from app.briefing.morning import is_enabled as brief_enabled
+
+        if brief_enabled(session):
+            # the 08:45 morning brief carries this content in one message
+            log.info("digest_suppressed_by_morning_brief")
+            return 0
         window_start = session.scalar(
             select(func.max(Notification.sent_at)).where(
                 Notification.kind == "digest", Notification.ok.is_(True)

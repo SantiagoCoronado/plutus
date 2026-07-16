@@ -63,6 +63,12 @@ class Settings(BaseSettings):
     # an fx close older than this converts with a stale warning instead of silently
     fx_max_stale_days: int = 7
 
+    # --- morning brief (spec phase 12) — one 08:45 notification instead of the
+    # separate digest/memo/maturity sends. An app_settings row (Settings UI
+    # toggle) overrides the env value without a restart.
+    morning_brief_enabled: bool = True
+    morning_brief_on_quiet: str = "send"  # send an "all quiet" line | skip entirely
+
     # app <-> agent-sidecar shared secret (phase 9 M2). The sidecar refuses to
     # boot without it and 401s any request that doesn't present it.
     sidecar_shared_secret: str = ""

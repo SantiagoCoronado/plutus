@@ -237,6 +237,11 @@ def _notify_memos_ready(note_ids: list[int]) -> None:
 
     session = SessionLocal()
     try:
+        from app.briefing.morning import is_enabled as brief_enabled
+
+        if brief_enabled(session):
+            # the 08:45 morning brief lists overnight memos — skip the extra ping
+            return
         count = len(note_ids)
         plural = "s" if count != 1 else ""
         deliver(

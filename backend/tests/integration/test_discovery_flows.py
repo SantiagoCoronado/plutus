@@ -420,6 +420,16 @@ class TestCandidateApi:
         assert resp.status_code == 422
 
 
+def _brief_off() -> None:
+    """Pin the LEGACY notification path: the phase-12 morning brief (enabled by
+    default) suppresses the standalone digest these tests verify."""
+    from app.briefing.morning import set_enabled
+    from app.core.db import session_scope
+
+    with session_scope() as session:
+        set_enabled(session, False)
+
+
 class TestAlerts:
     @pytest.fixture
     def email_env(self, monkeypatch):
@@ -508,6 +518,7 @@ class TestAlerts:
                 )
 
     def test_digest_groups_mandates_and_advances_window(self, email_env, outbox):
+        _brief_off()  # the standalone digest is the LEGACY path (brief disabled)
         from app.discovery.notify import send_digest
 
         self.seed_digest_candidates()
@@ -523,6 +534,7 @@ class TestAlerts:
         assert len(outbox.instances) == 1
 
     def test_failed_digest_does_not_advance_the_window(self, email_env, outbox, monkeypatch):
+        _brief_off()
         from app.discovery import notify as notify_module
         from app.models import Notification
 

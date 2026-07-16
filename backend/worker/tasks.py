@@ -218,6 +218,24 @@ def sync_exchange_nightly() -> list[int]:
     return sync_all_bitso_accounts()
 
 
+@celery_app.task(name="worker.tasks.send_morning_brief", time_limit=300, soft_time_limit=270)
+def send_morning_brief() -> dict:
+    """08:45 beat: ONE consolidated notification — portfolio snapshot, new
+    candidates, overnight memos, upcoming maturities, alert recap, system line.
+    Locked + once-per-local-day inside, so retries and catch-ups can't double-send."""
+    from app.briefing.morning import send_morning_brief as run_brief
+    from app.core.db import session_scope
+    from app.core.locks import redis_lock
+    from app.providers.registry import _shared_redis
+
+    with redis_lock(_shared_redis(), "brief:morning", ttl_seconds=290) as acquired:
+        if not acquired:
+            log.info("morning_brief skipped: another run holds the lock")
+            return {"status": "locked"}
+        with session_scope() as session:
+            return run_brief(session)
+
+
 @celery_app.task(name="worker.tasks.run_ops_watchdog", time_limit=120, soft_time_limit=100)
 def run_ops_watchdog() -> dict:
     """Hourly beat: notify (deduped per issue per day) when ingestion goes red,

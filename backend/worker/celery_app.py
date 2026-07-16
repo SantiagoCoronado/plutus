@@ -88,6 +88,14 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=3, minute=40),
         "options": {"expires": 6 * 3600},
     },
+    # the morning brief (spec phase 12): one 08:45 message consolidating the
+    # 08:00 digest + 08:15 memos + 08:30 maturities (which self-suppress while
+    # the brief is enabled) plus an alert recap and a system line
+    "morning-brief": {
+        "task": "worker.tasks.send_morning_brief",
+        "schedule": crontab(hour=8, minute=45),
+        "options": {"expires": 6 * 3600},
+    },
     # hourly ops watchdog: pushes ingestion-red / silent-streamer / stale-backup
     # notifications through the alert channels, deduped per issue per day
     "ops-watchdog": {

@@ -847,6 +847,23 @@ export interface BitsoTestResult {
   error?: string | null
 }
 
+// --- morning brief (Phase 12) ---
+
+export interface BriefSettings {
+  enabled: boolean
+  scheduled_at: string
+  on_quiet: string
+  channels: string[]
+}
+
+export interface BriefTestResult {
+  ok: boolean
+  subject: string
+  sections: string[]
+  channels: string[]
+  error?: string | null
+}
+
 // --- ingestion health (Phase 7) ---
 
 export type HealthLight = 'green' | 'amber' | 'red'
@@ -1257,6 +1274,12 @@ export const api = {
   // single-use 30s websocket ticket — minted per (re)connect by ws.ts
   wsTicket: () =>
     request<{ ticket: string; expires_in: number }>('/ws-ticket', { method: 'POST' }),
+
+  // --- morning brief (Phase 12) ---
+  briefSettings: () => request<BriefSettings>('/brief'),
+  putBriefSettings: (body: { enabled: boolean }) =>
+    request<BriefSettings>('/brief', { method: 'PUT', body: JSON.stringify(body) }),
+  testBrief: () => request<BriefTestResult>('/brief/test', { method: 'POST' }),
 
   // --- ingestion health (Phase 7) ---
   ingestionHealth: () => request<IngestionHealth>('/health/ingestion'),

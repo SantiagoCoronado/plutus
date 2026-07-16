@@ -9,6 +9,7 @@ from app.api.routes import (
     assets,
     backtests,
     bank_investments,
+    brief,
     candidates,
     dashboard,
     exchanges,
@@ -45,6 +46,7 @@ api_router.include_router(alerts.router)
 api_router.include_router(exchanges.router)
 api_router.include_router(health.router)
 api_router.include_router(ws_quotes.router)
+api_router.include_router(brief.router)
 
 
 @api_router.get("/ping", tags=["meta"])

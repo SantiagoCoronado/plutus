@@ -117,6 +117,12 @@ def _close_term(session: Session, investment: BankInvestment, closed_on: date) -
 
 
 def _send_reminders(session: Session) -> int:
+    from app.briefing.morning import is_enabled as brief_enabled
+
+    if brief_enabled(session):
+        # rollovers/flips above still ran — only the standalone reminder message
+        # is suppressed; the 08:45 morning brief lists upcoming maturities
+        return 0
     today = date.today()
     horizon = today + timedelta(days=get_settings().maturity_reminder_days)
     upcoming = session.execute(

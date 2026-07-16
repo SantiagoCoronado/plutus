@@ -808,14 +808,25 @@ class TestMaturities:
         return response.json()
 
     def test_reminder_sent_once(self, client, email_env, outbox):
+        from app.briefing.morning import set_enabled
         from app.portfolio.maturities import run_maturity_check
 
-        # matures in 3 days (inside the 7-day reminder window)
+        # standalone reminders are the LEGACY path; the morning brief suppresses them
+        with session_scope() as session:
+            set_enabled(session, False)
+
+        # matures in ~3 days (inside the 7-day reminder window). Days-left is
+        # computed from the maturity date the API returns, not hardcoded — the
+        # investment is seeded off the UTC clock while the reminder counts from
+        # the local date, so a fixed "3" flakes in the late-evening window.
         investment = self.make_investment(client, start_days_ago=87, term_days=90)
+        expected_days = (
+            datetime.fromisoformat(investment["maturity_date"]).date() - datetime.now().date()
+        ).days
         assert run_maturity_check() == 1
         assert len(outbox.instances) == 1
         message = outbox.instances[0].sent[0]
-        assert "matures in 3 day(s)" in message["Subject"]
+        assert f"matures in {expected_days} day(s)" in message["Subject"]
         assert "Pagaré" in message.get_content()
 
         # second run: deduped by (investment, maturity_date)
