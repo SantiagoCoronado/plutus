@@ -1,4 +1,4 @@
-import { api } from './client'
+import { api, ApiError } from './client'
 
 export interface Tick {
   symbol: string
@@ -33,6 +33,10 @@ export function openQuoteStream(
   let backoff = BACKOFF_START_MS
   let closedByUser = false
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  // auth failures are not transient: stop reconnecting instead of hammering
+  // the server every 1-15s forever (the 401 banner tells the user what to fix)
+  let consecutiveAuthFailures = 0
+  const MAX_AUTH_FAILURES = 3
 
   const subscribe = () => {
     if (ws?.readyState === WebSocket.OPEN) {
@@ -50,9 +54,14 @@ export function openQuoteStream(
     let ticket: string
     try {
       ticket = (await api.wsTicket()).ticket
-    } catch {
-      // token invalid or API down — same treatment as a dropped socket
+      consecutiveAuthFailures = 0
+    } catch (e) {
       onStatus?.('error')
+      if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
+        consecutiveAuthFailures += 1
+        if (consecutiveAuthFailures >= MAX_AUTH_FAILURES) return // give up until remount
+      }
+      // API down or transient — same treatment as a dropped socket
       scheduleReconnect()
       return
     }
@@ -83,8 +92,14 @@ export function openQuoteStream(
       }
     }
     ws.onerror = () => onStatus?.('error')
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       onStatus?.('closed')
+      if (event.code === 4401) {
+        // ticket rejected: a fresh mint usually fixes a race, but repeated
+        // rejections mean auth is broken — stop after the cap
+        consecutiveAuthFailures += 1
+        if (consecutiveAuthFailures >= MAX_AUTH_FAILURES) return
+      }
       scheduleReconnect()
     }
   }
