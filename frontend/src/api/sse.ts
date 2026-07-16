@@ -31,22 +31,8 @@ export async function streamEvents(
 
   const reader = resp.body.getReader()
   const decoder = new TextDecoder()
+  const parse = makeSseParser(onEvent)
   let buffer = ''
-  let eventName = 'message'
-
-  const handleLine = (line: string) => {
-    if (line.startsWith(':')) return // heartbeat comment
-    if (line.startsWith('event:')) {
-      eventName = line.slice(6).trim()
-    } else if (line.startsWith('data:')) {
-      try {
-        onEvent({ type: eventName, data: JSON.parse(line.slice(5).trim()) })
-      } catch {
-        // malformed frame — skip rather than kill the stream
-      }
-      eventName = 'message'
-    }
-  }
 
   for (;;) {
     const { done, value } = await reader.read()
@@ -54,7 +40,40 @@ export async function streamEvents(
     buffer += decoder.decode(value, { stream: true })
     const lines = buffer.split('\n')
     buffer = lines.pop() ?? ''
-    lines.forEach(handleLine)
+    lines.forEach(parse)
   }
-  if (buffer) handleLine(buffer)
+  if (buffer) parse(buffer)
+  parse('') // flush a frame the stream ended without terminating
+}
+
+// Per the SSE spec, consecutive `data:` lines concatenate with "\n" and the
+// event dispatches on the BLANK line — a JSON payload containing a newline
+// arrives as several data: lines and must be reassembled before parsing.
+// Module-level state would leak across streams, so the parser is a factory.
+export function makeSseParser(onEvent: (event: SseEvent) => void) {
+  let eventName = 'message'
+  let dataLines: string[] = []
+
+  return (line: string) => {
+    line = line.endsWith('\r') ? line.slice(0, -1) : line
+    if (line === '') {
+      if (dataLines.length > 0) {
+        try {
+          onEvent({ type: eventName, data: JSON.parse(dataLines.join('\n')) })
+        } catch {
+          // malformed frame — skip rather than kill the stream
+        }
+      }
+      eventName = 'message'
+      dataLines = []
+      return
+    }
+    if (line.startsWith(':')) return // heartbeat comment
+    if (line.startsWith('event:')) {
+      eventName = line.slice(6).trim()
+    } else if (line.startsWith('data:')) {
+      const value = line.slice(5)
+      dataLines.push(value.startsWith(' ') ? value.slice(1) : value)
+    }
+  }
 }
