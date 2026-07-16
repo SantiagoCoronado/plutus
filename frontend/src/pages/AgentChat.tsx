@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { api, relTime, type AgentConversation } from '../api/client'
+import { api, ApiError, relTime, type AgentConversation } from '../api/client'
 import { streamEvents } from '../api/sse'
-import { itemsFromServer, type ChatItem } from '../components/agent/chatItems'
+import { applyEvent, itemsFromServer, type ChatItem } from '../components/agent/chatItems'
 
 const inputClass =
   'w-full rounded border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-sky-700'
@@ -43,7 +43,16 @@ export default function AgentChat() {
   }
 
   const removeConversation = async (id: number) => {
-    await api.deleteAgentConversation(id)
+    if (!window.confirm('Delete this conversation? Its transcript is gone for good.')) return
+    try {
+      await api.deleteAgentConversation(id)
+    } catch (e) {
+      setItems((list) => [
+        ...list,
+        { kind: 'error', text: `delete failed: ${e instanceof Error ? e.message : String(e)}` },
+      ])
+      return
+    }
     setConversations((list) => list.filter((c) => c.id !== id))
     if (active?.id === id) {
       setActive(null)
@@ -82,33 +91,63 @@ export default function AgentChat() {
         controller.signal,
       )
     } catch (e) {
-      setItems((list) => [
-        ...list,
-        { kind: 'error', text: e instanceof Error ? e.message : String(e) },
-      ])
+      // switching conversations aborts the active stream on purpose — that
+      // cancellation must not surface as an error bubble in the NEW chat
+      if (!(e instanceof DOMException && e.name === 'AbortError')) {
+        setItems((list) => [
+          ...list,
+          { kind: 'error', text: e instanceof Error ? e.message : String(e) },
+        ])
+      }
     } finally {
       setStreaming(false)
       loadConversations()
     }
   }
 
-  const resolveConfirmation = async (id: number, approve: boolean) => {
-    const resolution = approve
-      ? await api.approveConfirmation(id)
-      : await api.rejectConfirmation(id)
+  // in-flight guard: React state alone can't stop a double-click that lands
+  // before the re-render, and a write action must never fire twice
+  const resolvingRef = useRef<Set<number>>(new Set())
+
+  const patchConfirmation = (
+    id: number,
+    patch: Partial<Extract<ChatItem, { kind: 'confirmation' }>>,
+  ) =>
     setItems((list) =>
       list.map((item) =>
-        item.kind === 'confirmation' && item.id === id
-          ? {
-              ...item,
-              resolved: resolution.status === 'error' ? 'failed' : (resolution.status as
-                | 'approved'
-                | 'rejected'),
-              resolution: resolution.result_summary ?? resolution.error,
-            }
-          : item,
+        item.kind === 'confirmation' && item.id === id ? { ...item, ...patch } : item,
       ),
     )
+
+  const resolveConfirmation = async (id: number, approve: boolean) => {
+    if (resolvingRef.current.has(id)) return
+    resolvingRef.current.add(id)
+    patchConfirmation(id, { resolving: true })
+    try {
+      const resolution = approve
+        ? await api.approveConfirmation(id)
+        : await api.rejectConfirmation(id)
+      patchConfirmation(id, {
+        resolving: false,
+        resolved:
+          resolution.status === 'error' ? 'failed' : (resolution.status as 'approved' | 'rejected'),
+        resolution: resolution.result_summary ?? resolution.error,
+      })
+    } catch (e) {
+      // whatever happened server-side, this card is no longer safely clickable
+      const already = e instanceof ApiError && e.status === 409
+      patchConfirmation(id, {
+        resolving: false,
+        resolved: 'failed',
+        resolution: already
+          ? 'already resolved elsewhere — reopen the conversation for the outcome'
+          : e instanceof Error
+            ? e.message
+            : String(e),
+      })
+    } finally {
+      resolvingRef.current.delete(id)
+    }
   }
 
   return (
@@ -124,17 +163,26 @@ export default function AgentChat() {
           {conversations.map((conversation) => (
             <div
               key={conversation.id}
-              className={`group flex cursor-pointer items-center justify-between px-3 py-2 text-xs hover:bg-zinc-900 ${
+              role="button"
+              tabIndex={0}
+              className={`group flex cursor-pointer items-center justify-between px-3 py-2 text-xs hover:bg-zinc-900 focus:bg-zinc-900 focus:outline-none ${
                 active?.id === conversation.id ? 'bg-zinc-900 text-zinc-100' : 'text-zinc-400'
               }`}
               onClick={() => openConversation(conversation)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  openConversation(conversation)
+                }
+              }}
             >
               <div className="min-w-0">
                 <p className="truncate">{conversation.title ?? 'untitled'}</p>
                 <p className="text-[10px] text-zinc-600">{relTime(conversation.updated_at)}</p>
               </div>
               <button
-                className="hidden text-zinc-600 hover:text-red-400 group-hover:block"
+                aria-label="delete conversation"
+                className="hidden text-zinc-600 hover:text-red-400 group-hover:block group-focus-within:block"
                 onClick={(e) => {
                   e.stopPropagation()
                   removeConversation(conversation.id)
@@ -237,67 +285,6 @@ export default function AgentChat() {
   )
 }
 
-function applyEvent(
-  list: ChatItem[],
-  type: string,
-  data: Record<string, unknown>,
-): ChatItem[] {
-  switch (type) {
-    case 'text_delta': {
-      const last = list[list.length - 1]
-      if (last?.kind === 'assistant' && last.streaming) {
-        return [
-          ...list.slice(0, -1),
-          { ...last, text: last.text + String(data.text ?? '') },
-        ]
-      }
-      return [...list, { kind: 'assistant', text: String(data.text ?? ''), streaming: true }]
-    }
-    case 'tool_call':
-      return [
-        ...list.map((item) =>
-          item.kind === 'assistant' ? { ...item, streaming: false } : item,
-        ),
-        { kind: 'tool', name: String(data.name), running: true },
-      ]
-    case 'tool_result':
-      return list.map((item) =>
-        item.kind === 'tool' && item.running && item.name === data.name
-          ? {
-              ...item,
-              running: false,
-              ok: Boolean(data.ok),
-              summary: (data.summary as string) ?? null,
-              error: (data.error as string) ?? null,
-            }
-          : item,
-      )
-    case 'confirmation_required':
-      return [
-        ...list.map((item) =>
-          item.kind === 'tool' && item.running && item.name === data.name
-            ? { ...item, running: false, ok: true, summary: 'proposed — awaiting approval' }
-            : item,
-        ),
-        {
-          kind: 'confirmation',
-          id: Number(data.confirmation_id),
-          name: String(data.name),
-          args: (data.arguments as Record<string, unknown>) ?? {},
-          summary: (data.summary as string) ?? null,
-        },
-      ]
-    case 'error':
-      return [...list, { kind: 'error', text: String(data.message ?? 'unknown error') }]
-    case 'done':
-      return list.map((item) =>
-        item.kind === 'assistant' ? { ...item, streaming: false } : item,
-      )
-    default:
-      return list
-  }
-}
-
 function ChatItemView({
   item,
   onResolve,
@@ -367,13 +354,15 @@ function ChatItemView({
         ) : (
           <div className="mt-2 flex gap-2">
             <button
-              className="rounded bg-emerald-800 px-3 py-1 text-xs hover:bg-emerald-700"
+              className="rounded bg-emerald-800 px-3 py-1 text-xs hover:bg-emerald-700 disabled:opacity-40"
+              disabled={item.resolving}
               onClick={() => onResolve(item.id, true)}
             >
-              Approve
+              {item.resolving ? '…' : 'Approve'}
             </button>
             <button
-              className="rounded bg-zinc-800 px-3 py-1 text-xs hover:bg-zinc-700"
+              className="rounded bg-zinc-800 px-3 py-1 text-xs hover:bg-zinc-700 disabled:opacity-40"
+              disabled={item.resolving}
               onClick={() => onResolve(item.id, false)}
             >
               Reject
