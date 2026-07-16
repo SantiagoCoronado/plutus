@@ -52,6 +52,7 @@ function SummaryBar({ report }: { report: PositionsReport }) {
 export default function Portfolio() {
   const [currency, setCurrencyState] = useState(getCurrency())
   const [report, setReport] = useState<PositionsReport | null>(null)
+  const [failed, setFailed] = useState<string | null>(null)
   const [accounts, setAccounts] = useState<Account[]>([])
   const [investments, setInvestments] = useState<BankInvestment[]>([])
   const [importing, setImporting] = useState(false)
@@ -63,13 +64,28 @@ export default function Portfolio() {
       api.accounts(),
       api.bankInvestments(),
     ])
-    setReport(positions)
-    setAccounts(accountList)
-    setInvestments(investmentList)
+    return { positions, accountList, investmentList }
   }, [currency])
 
   useEffect(() => {
-    load().catch(() => setReport(null))
+    // cancelled-flag: a slower response from a superseded currency/refresh must
+    // not land after the newer one (toggle USD→MXN→USD fast = MXN figures shown)
+    let cancelled = false
+    setFailed(null)
+    load()
+      .then(({ positions, accountList, investmentList }) => {
+        if (cancelled) return
+        setReport(positions)
+        setAccounts(accountList)
+        setInvestments(investmentList)
+      })
+      .catch((e) => {
+        // failure is an error with a retry — not an eternal "Loading…"
+        if (!cancelled) setFailed(e instanceof Error ? e.message : String(e))
+      })
+    return () => {
+      cancelled = true
+    }
   }, [load, refreshKey])
 
   const refresh = () => setRefreshKey((k) => k + 1)
@@ -91,7 +107,18 @@ export default function Portfolio() {
         </div>
       </div>
 
-      {report === null ? (
+      {failed !== null ? (
+        <div className="rounded border border-red-900/60 bg-red-950/20 p-4 text-sm">
+          <p className="text-red-300">Couldn't load the portfolio.</p>
+          <p className="mt-1 break-all text-xs text-red-400/80">{failed}</p>
+          <button
+            className="mt-3 rounded border border-zinc-700 px-3 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
+            onClick={refresh}
+          >
+            Retry
+          </button>
+        </div>
+      ) : report === null ? (
         <p className="text-sm text-zinc-500">Loading…</p>
       ) : (
         <>

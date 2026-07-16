@@ -1,8 +1,35 @@
 import { useEffect, useState } from 'react'
-import { NavLink, Outlet } from 'react-router-dom'
-import { api, getToken, setToken, type HealthStatus } from './api/client'
+import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { api, getToken, onUnauthorized, setToken, type HealthStatus } from './api/client'
 import AttributionFooter from './components/AttributionFooter'
+import ErrorBoundary from './components/ErrorBoundary'
 import SearchBox from './components/SearchBox'
+
+function TokenBanner() {
+  const [invalid, setInvalid] = useState(false)
+
+  useEffect(() => onUnauthorized(() => setInvalid(true)), [])
+  // a freshly saved token clears the banner on the next successful call;
+  // cheapest signal we have is any location/token change re-probe via /health
+  useEffect(() => {
+    if (!invalid) return
+    const id = setInterval(() => {
+      api.health().then(() => {
+        // /health is unauthenticated — probe a real endpoint quietly
+        api.agentConversations().then(() => setInvalid(false)).catch(() => {})
+      })
+    }, 5000)
+    return () => clearInterval(id)
+  }, [invalid])
+
+  if (!invalid) return null
+  return (
+    <div className="border-b border-amber-900 bg-amber-950/60 px-6 py-2 text-xs text-amber-300">
+      The API rejected your token — paste the correct <span className="font-mono">APP_AUTH_TOKEN</span>{' '}
+      into the token field above and save. Pages will show errors until then.
+    </div>
+  )
+}
 
 function HealthBadge() {
   const [health, setHealth] = useState<HealthStatus | null>(null)
@@ -74,6 +101,7 @@ const navClass = ({ isActive }: { isActive: boolean }) =>
   `rounded px-3 py-1.5 text-sm ${isActive ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'}`
 
 export default function App() {
+  const location = useLocation()
   return (
     <div className="flex min-h-screen flex-col bg-zinc-950 text-zinc-100">
       <header className="flex items-center justify-between gap-4 border-b border-zinc-800 px-6 py-3">
@@ -119,8 +147,11 @@ export default function App() {
           <HealthBadge />
         </div>
       </header>
+      <TokenBanner />
       <main className="flex-1 p-6">
-        <Outlet />
+        <ErrorBoundary resetKey={location.pathname}>
+          <Outlet />
+        </ErrorBoundary>
       </main>
       <AttributionFooter />
     </div>

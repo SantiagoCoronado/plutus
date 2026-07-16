@@ -17,6 +17,16 @@ export class ApiError extends Error {
   }
 }
 
+// Global 401 fan-out: any API call rejected for auth notifies subscribers (the
+// token banner in App.tsx), so a bad token surfaces once, loudly — instead of
+// masquerading as "no candles yet" empty states on every page.
+const unauthorizedListeners = new Set<() => void>()
+
+export function onUnauthorized(listener: () => void): () => void {
+  unauthorizedListeners.add(listener)
+  return () => unauthorizedListeners.delete(listener)
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers)
   const token = getToken()
@@ -24,7 +34,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (init?.body) headers.set('Content-Type', 'application/json')
 
   const resp = await fetch(`${API_BASE}${path}`, { ...init, headers })
-  if (!resp.ok) throw new ApiError(resp.status, await resp.text())
+  if (!resp.ok) {
+    if (resp.status === 401 || resp.status === 403) {
+      unauthorizedListeners.forEach((listener) => listener())
+    }
+    throw new ApiError(resp.status, await resp.text())
+  }
   if (resp.status === 204) return undefined as T
   return resp.json() as Promise<T>
 }

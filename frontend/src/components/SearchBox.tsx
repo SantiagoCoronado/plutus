@@ -5,6 +5,7 @@ import { api, type SearchResultItem } from '../api/client'
 export default function SearchBox() {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResultItem[]>([])
+  const [searchError, setSearchError] = useState(false)
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const navigate = useNavigate()
@@ -13,18 +14,31 @@ export default function SearchBox() {
   useEffect(() => {
     if (query.trim().length < 2) {
       setResults([])
+      setSearchError(false)
       return
     }
+    let cancelled = false
     const handle = setTimeout(() => {
       api
         .search(query.trim())
         .then((r) => {
+          if (cancelled) return
           setResults(r.results)
+          setSearchError(false)
           setOpen(true)
         })
-        .catch(() => setResults([]))
+        .catch(() => {
+          // a failed search must not read as "no matches"
+          if (cancelled) return
+          setResults([])
+          setSearchError(true)
+          setOpen(true)
+        })
     }, 300)
-    return () => clearTimeout(handle)
+    return () => {
+      cancelled = true
+      clearTimeout(handle)
+    }
   }, [query])
 
   useEffect(() => {
@@ -71,7 +85,12 @@ export default function SearchBox() {
         placeholder="Search symbols… (AAPL, bitcoin, EUR/USD)"
         className="w-full rounded border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 placeholder-zinc-600 focus:border-zinc-500 focus:outline-none"
       />
-      {open && results.length > 0 && (
+      {open && searchError && (
+        <div className="absolute z-20 mt-1 w-full rounded border border-red-900/60 bg-zinc-900 px-3 py-2 text-xs text-red-400 shadow-xl">
+          Search failed — check the API connection or your token.
+        </div>
+      )}
+      {open && !searchError && results.length > 0 && (
         <ul className="absolute z-20 mt-1 max-h-80 w-full overflow-auto rounded border border-zinc-700 bg-zinc-900 shadow-xl">
           {results.map((item, i) => (
             <li key={`${item.symbol}-${item.asset_class}-${i}`}>

@@ -29,6 +29,7 @@ export default function Research() {
   const [asset, setAsset] = useState<Asset | null>(null)
   const [metrics, setMetrics] = useState<AssetMetrics | null>(null)
   const [candles, setCandles] = useState<Candle[]>([])
+  const [candlesError, setCandlesError] = useState<string | null>(null)
   const [series, setSeries] = useState<IndicatorSeries>({})
   const [interval, setInterval] = useState<ChartInterval>('1d')
   const [selected, setSelected] = useState<Set<string>>(new Set(DEFAULT_INDICATORS))
@@ -36,17 +37,33 @@ export default function Research() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    // cancelled-flag: navigating /asset/1 → /asset/2 fast must never render
+    // asset 1's slower response under asset 2's URL
+    let cancelled = false
     setAsset(null)
     setMetrics(null)
     setError(null)
     api
       .asset(assetId)
       .then((a) => {
+        if (cancelled) return
         setAsset(a)
         setTab(a.asset_class === 'stock' || a.asset_class === 'etf' ? 'fundamentals' : 'news')
       })
-      .catch((e) => setError(String(e)))
-    api.metrics(assetId).then(setMetrics).catch(() => setMetrics(null))
+      .catch((e) => {
+        if (!cancelled) setError(String(e))
+      })
+    api
+      .metrics(assetId)
+      .then((m) => {
+        if (!cancelled) setMetrics(m)
+      })
+      .catch(() => {
+        if (!cancelled) setMetrics(null)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [assetId])
 
   const indicatorKeys = useMemo(
@@ -56,7 +73,24 @@ export default function Research() {
 
   useEffect(() => {
     if (!asset) return
-    api.ohlcv(assetId, interval).then((r) => setCandles(r.candles)).catch(() => setCandles([]))
+    let cancelled = false
+    setCandlesError(null)
+    api
+      .ohlcv(assetId, interval)
+      .then((r) => {
+        if (!cancelled) setCandles(r.candles)
+      })
+      .catch((e) => {
+        // a failed fetch is an error, not "no candles yet" (that message once
+        // covered everything, including a 401)
+        if (!cancelled) {
+          setCandles([])
+          setCandlesError(e instanceof Error ? e.message : String(e))
+        }
+      })
+    return () => {
+      cancelled = true
+    }
   }, [assetId, interval, asset])
 
   useEffect(() => {
@@ -65,10 +99,18 @@ export default function Research() {
       setSeries({})
       return
     }
+    let cancelled = false
     api
       .indicators(assetId, indicatorKeys, interval)
-      .then((r) => setSeries(r.series))
-      .catch(() => setSeries({}))
+      .then((r) => {
+        if (!cancelled) setSeries(r.series)
+      })
+      .catch(() => {
+        if (!cancelled) setSeries({})
+      })
+    return () => {
+      cancelled = true
+    }
   }, [assetId, interval, asset, indicatorKeys])
 
   if (error) return <p className="text-sm text-red-400">Failed to load asset: {error}</p>
@@ -126,6 +168,10 @@ export default function Research() {
               showRsi={selected.has('rsi_14')}
               showMacd={selected.has('macd')}
             />
+          ) : candlesError ? (
+            <div className="flex h-96 items-center justify-center px-6 text-center text-sm text-red-400">
+              Couldn't load candles: {candlesError}
+            </div>
           ) : (
             <div className="flex h-96 items-center justify-center text-sm text-zinc-600">
               No candles yet — the backfill may still be running.

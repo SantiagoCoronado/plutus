@@ -34,8 +34,8 @@ function lerp(a: number[], b: number[], t: number): string {
   return `rgb(${c[0]},${c[1]},${c[2]})`
 }
 
-/** change is a PERCENT (1.23 = +1.23%). */
-function tileColor(change: number): string {
+/** change is a PERCENT (1.23 = +1.23%). Exported for unit tests. */
+export function tileColor(change: number): string {
   const t = Math.max(-CLAMP, Math.min(CLAMP, change)) / CLAMP
   return t >= 0 ? lerp(NEUTRAL, GREEN, t) : lerp(NEUTRAL, RED, -t)
 }
@@ -91,6 +91,7 @@ export default function HeatmapTreemap({ currency }: { currency: string }) {
   const [mode, setMode] = useState<HeatmapMode>('portfolio')
   const [timeframe, setTimeframe] = useState<HeatmapTimeframe>('1D')
   const [tiles, setTiles] = useState<HeatmapTile[] | null>(null)
+  const [failed, setFailed] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<echarts.ECharts | null>(null)
   const navigate = useNavigate()
@@ -98,20 +99,31 @@ export default function HeatmapTreemap({ currency }: { currency: string }) {
   navRef.current = navigate
 
   useEffect(() => {
+    let cancelled = false
     setTiles(null)
+    setFailed(false)
     api
       .dashboardHeatmap(mode, timeframe, currency)
-      .then((res) => setTiles(res.tiles))
-      .catch(() => setTiles([]))
+      .then((res) => {
+        if (!cancelled) setTiles(res.tiles)
+      })
+      .catch(() => {
+        // a failed load is an ERROR, not "no positions yet"
+        if (!cancelled) setFailed(true)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [mode, timeframe, currency])
 
-  // 1D tiles recolor live from the quote stream; bounded modes only (market is huge)
+  // 1D tiles recolor live from the quote stream; bounded modes only (market is huge).
+  // 1s throttle: a busy market must not rebuild the chart per tick.
   const live = timeframe === '1D' && mode !== 'market'
   const liveSymbols = useMemo(
     () => (live ? (tiles ?? []).map((t) => t.symbol) : []),
     [live, tiles],
   )
-  const { quotes } = useQuotes(liveSymbols)
+  const { quotes } = useQuotes(liveSymbols, 1000)
 
   // init once: create the chart, wire click-through + a resize observer
   useEffect(() => {
@@ -131,7 +143,7 @@ export default function HeatmapTreemap({ currency }: { currency: string }) {
     }
   }, [])
 
-  // (re)draw whenever the tiles or live ticks change
+  // full (re)draw only when the tile set itself changes
   useEffect(() => {
     const chart = chartRef.current
     if (!chart) return
@@ -199,9 +211,18 @@ export default function HeatmapTreemap({ currency }: { currency: string }) {
       },
       { notMerge: true },
     )
-  }, [tiles, quotes, live])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- quotes drive the
+    // cheap merged update below; rebuilding the whole option per tick was the bug
+  }, [tiles, live])
 
-  const empty = tiles !== null && tiles.length === 0
+  // live ticks patch only the series data, merged — never a full rebuild
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart || !live || !tiles || tiles.length === 0) return
+    chart.setOption({ series: [{ data: buildData(tiles, quotes, live) }] })
+  }, [quotes, tiles, live])
+
+  const empty = tiles !== null && tiles.length === 0 && !failed
 
   return (
     <div className="rounded border border-zinc-800 p-4">
@@ -248,9 +269,14 @@ export default function HeatmapTreemap({ currency }: { currency: string }) {
                 : 'No tracked assets yet.'}
           </div>
         )}
-        {tiles === null && (
+        {tiles === null && !failed && (
           <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-600">
             Loading…
+          </div>
+        )}
+        {failed && (
+          <div className="absolute inset-0 flex items-center justify-center text-sm text-red-400">
+            Couldn't load the heatmap — is the API reachable?
           </div>
         )}
       </div>

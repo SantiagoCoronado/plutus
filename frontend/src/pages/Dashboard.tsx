@@ -16,15 +16,24 @@ export default function Dashboard() {
   const [failed, setFailed] = useState(false)
 
   useEffect(() => {
+    // cancelled-flag: a fast USD→MXN→USD toggle must not render MXN figures last
+    let cancelled = false
     setFailed(false)
     api
       .dashboard(currency)
-      .then(setData)
-      .catch(() => setFailed(true))
+      .then((d) => {
+        if (!cancelled) setData(d)
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [currency])
 
   if (failed) {
-    return <p className="text-sm text-zinc-500">Couldn't load the dashboard.</p>
+    return <p className="text-sm text-red-400">Couldn't load the dashboard — is the API reachable?</p>
   }
   if (!data) {
     return <p className="text-sm text-zinc-500">Loading…</p>
