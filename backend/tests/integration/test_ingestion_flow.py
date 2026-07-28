@@ -120,7 +120,7 @@ class TestAbandonedRuns:
     status as 'running' indefinitely.
     """
 
-    def test_killed_run_is_closed_as_failed(self, respx_mock):
+    def test_killed_run_is_closed_not_left_running(self, respx_mock):
         mock_all_providers(respx_mock)
         seed_assets()
 

@@ -34,6 +34,38 @@ class TestBrokerVisibilityTimeout:
         assert celery_app.conf.task_acks_late is True
 
 
+class TestLockTtlsCoverTheirTasks:
+    """redis_lock's contract: "pick it >= the wrapped work's worst case".
+
+    A TTL below the task's time limit expires the lock while the task is still
+    running, so the next beat tick acquires it and races the live run — the
+    exact pile-up the lock exists to prevent. pull_news shipped with a TTL of
+    the 15-min beat cadence (840s) while running under the global 1800s limit.
+    """
+
+    def _effective_time_limit(self, task) -> int:
+        # a task's own time_limit wins; otherwise the app-wide default applies
+        return task.time_limit or celery_app.conf.task_time_limit
+
+    @pytest.mark.parametrize(
+        ("task_name", "ttl"),
+        [
+            ("ingest_eod", tasks.INGEST_LOCK_TTL_S),
+            ("ingest_eod_all", tasks.INGEST_LOCK_TTL_S),
+            ("refresh_fundamentals", tasks.INGEST_LOCK_TTL_S),
+            ("pull_news", tasks.DEFAULT_LOCK_TTL_S),
+        ],
+    )
+    def test_ttl_is_at_least_the_worst_case_runtime(self, task_name, ttl):
+        task = getattr(tasks, task_name)
+        assert ttl >= self._effective_time_limit(task), (
+            f"{task_name}'s lock would expire while the task is still running"
+        )
+
+    def test_news_lock_outlives_the_beat_cadence_it_used_to_track(self):
+        assert tasks.DEFAULT_LOCK_TTL_S > 15 * 60
+
+
 class TestEodLock:
     """_eod_once must be a single runner per asset class."""
 

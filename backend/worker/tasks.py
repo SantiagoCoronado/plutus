@@ -43,8 +43,12 @@ def _notify_task_failure(sender=None, exception=None, **_kwargs):
 # ~100 stocks ≈ 2.3h/night) — they need far more than the global 30-min limit.
 INGEST_LIMITS = {"time_limit": 14_400, "soft_time_limit": 14_100}
 
-# Lock TTL is the crash backstop, so it tracks the hard time limit above.
+# redis_lock's contract: the TTL is the crash backstop, so it must be >= the
+# wrapped work's worst case. Derive both from the time limits rather than
+# writing a number, so a lock can never quietly outlive its own task again.
 INGEST_LOCK_TTL_S = INGEST_LIMITS["time_limit"]
+# Tasks without per-task limits fall back to the global one.
+DEFAULT_LOCK_TTL_S = celery_app.conf.task_time_limit
 
 
 SKIPPED_LOCKED = -1  # task return value meaning "another run held the lock"
@@ -135,12 +139,17 @@ def refresh_fundamentals_asset(asset_id: int) -> int:
 def pull_news() -> int:
     """15-minute company-news pull for stock/ETF assets. Locked: a pull that
     overruns its 15-min slot must not have the next tick racing it through the
-    same ~100 symbols on one Finnhub bucket."""
+    same ~100 symbols on one Finnhub bucket.
+
+    The TTL is the task's worst case (the global task_time_limit — this task
+    sets no limits of its own), NOT the 15-min beat cadence. A TTL below the
+    time limit would drop the lock while the pull was still running, which is
+    precisely the race the lock exists to prevent."""
     from app.core.locks import redis_lock
     from app.ingestion.news import run_news_pull
     from app.providers.registry import _shared_redis
 
-    with redis_lock(_shared_redis(), "ingest:news", ttl_seconds=14 * 60) as acquired:
+    with redis_lock(_shared_redis(), "ingest:news", ttl_seconds=DEFAULT_LOCK_TTL_S) as acquired:
         if not acquired:
             log.info("pull_news skipped: another run holds the lock")
             return SKIPPED_LOCKED
