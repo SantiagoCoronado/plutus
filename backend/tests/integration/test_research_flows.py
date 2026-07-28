@@ -163,12 +163,27 @@ class TestFundamentalsFlow:
         import os
 
         os.environ["FMP_API_KEY"] = "test-key"
+        # this flow exercises the FMP adapter, so pin it: PROVIDER_FUNDAMENTALS
+        # defaults to edgar and the mocks above only cover FMP's routes
+        previous = os.environ.get("PROVIDER_FUNDAMENTALS")
+        os.environ["PROVIDER_FUNDAMENTALS"] = "fmp"
         from app.core.config import get_settings
 
         get_settings.cache_clear()
+        from app.providers.registry import reset_registry
+
+        reset_registry()
         from app.ingestion.fundamentals import run_fundamentals_refresh
 
-        run_id = run_fundamentals_refresh()
+        try:
+            run_id = run_fundamentals_refresh()
+        finally:
+            if previous is None:
+                os.environ.pop("PROVIDER_FUNDAMENTALS", None)
+            else:
+                os.environ["PROVIDER_FUNDAMENTALS"] = previous
+            get_settings.cache_clear()
+            reset_registry()
         with session_scope() as session:
             run = session.get(IngestionRun, run_id)
             assert run.status == "success", run.details

@@ -12,10 +12,13 @@ log = get_logger(__name__)
 STATEMENT_CLASSES = ("stock",)  # ETFs get profile-only (FMP returns empty statements)
 PROFILE_CLASSES = ("stock", "etf")
 
-# FMP free tier: ~6 calls per stock against a 225/day budget. Each weekly run takes
-# the stalest assets first (never-fetched, then oldest fetched_at), so the whole
-# ~100-stock universe rotates through full coverage over ~3 weeks.
-ASSETS_PER_RUN = 32
+# How many assets one weekly run may touch, per provider. Each run takes the
+# stalest assets first (never-fetched, then oldest fetched_at).
+#   fmp:   ~6 calls per stock against a 225/day budget -> ~32 per run, so the
+#          universe only rotates through full coverage over ~3 weeks.
+#   edgar: one keyless call per stock at ~9 req/s -> the whole universe every run.
+ASSETS_PER_RUN = {"fmp": 32, "edgar": 250}
+DEFAULT_ASSETS_PER_RUN = 32
 
 
 def upsert_fundamentals(session, asset_id: int, periods, provider_name: str) -> int:
@@ -91,7 +94,7 @@ def run_fundamentals_refresh(asset_id: int | None = None) -> int:
                 query.where(Asset.asset_class.in_(PROFILE_CLASSES))
                 .outerjoin(last_fetched, last_fetched.c.asset_id == Asset.id)
                 .order_by(last_fetched.c.last_fetched.asc().nulls_first(), Asset.id)
-                .limit(ASSETS_PER_RUN)
+                .limit(ASSETS_PER_RUN.get(provider.name, DEFAULT_ASSETS_PER_RUN))
             )
         else:
             query = query.where(Asset.id == asset_id)

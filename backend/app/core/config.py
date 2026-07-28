@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     provider_stocks: str = "tiingo"
     provider_crypto: str = "binance"
     provider_forex: str = "twelvedata"
-    provider_fundamentals: str = "fmp"
+    provider_fundamentals: str = "edgar"
     provider_news: str = "finnhub"
 
     tiingo_api_key: str = ""
