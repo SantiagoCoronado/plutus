@@ -16,7 +16,7 @@ celery_app = Celery(
 # Kombu's Redis transport redelivers any message still unacked after this long,
 # and task_acks_late=True means the ack only lands when the task *finishes* — so
 # a visibility timeout shorter than the work hands a second worker a duplicate
-# of a task that is still running. The nightly EOD job paces ~2.3h inside the
+# of a task that is still running. The nightly EOD job paces ~2.6h inside the
 # Tiingo bucket, so the 3600s default was redelivering it every hour: duplicate
 # runs then split one token bucket, and both sides failed on rate limits.
 BROKER_VISIBILITY_TIMEOUT_S = 6 * 3600
@@ -52,7 +52,7 @@ celery_app.conf.beat_schedule = {
         "args": ("stock",),
     },
     # after all EOD jobs — snapshots read the bars written above. The ~100-stock
-    # universe paces at Tiingo's bucket (~80s/symbol), so eod-stocks finishes ~05:40.
+    # universe paces at Tiingo's bucket (~90s/symbol), so eod-stocks finishes ~05:55.
     "metrics-refresh": {
         "task": "worker.tasks.refresh_metrics",
         "schedule": crontab(hour=6, minute=30),

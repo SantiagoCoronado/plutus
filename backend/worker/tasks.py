@@ -39,8 +39,8 @@ def _notify_task_failure(sender=None, exception=None, **_kwargs):
     except Exception as exc:  # noqa: BLE001
         log.warning("task_failure_notify_failed", task=task_name, error=str(exc))
 
-# Ingestion tasks sleep inside the provider token bucket (Tiingo ~80s/symbol at
-# ~100 stocks ≈ 2.3h/night) — they need far more than the global 30-min limit.
+# Ingestion tasks sleep inside the provider token bucket (Tiingo ~90s/symbol at
+# ~105 stocks ≈ 2.6h/night) — they need far more than the global 30-min limit.
 INGEST_LIMITS = {"time_limit": 14_400, "soft_time_limit": 14_100}
 
 # redis_lock's contract: the TTL is the crash backstop, so it must be >= the
