@@ -1,9 +1,10 @@
 """Ingestion health aggregate: staleness per beat job + provider budget usage.
 
-Health is judged on the age of the last SUCCESSFUL run against each job's
-expected beat cadence — a failed run that self-heals on the next schedule never
-turns the light, while a job that silently stops running does. Budget usage is
-read from the day/month counters RateLimitedClient increments in Redis.
+Health is judged on the age of the last run that LANDED (see run_landed) against
+each job's expected beat cadence — a failed run that self-heals on the next
+schedule never turns the light, while a job that silently stops running does.
+Budget usage is read from the day/month counters RateLimitedClient increments
+in Redis.
 """
 
 from __future__ import annotations
@@ -35,6 +36,26 @@ EXPECTED_CADENCE: dict[str, tuple[timedelta, timedelta]] = {
 }
 
 LOOKBACK = timedelta(days=14)
+
+# A 'partial' run counts as the job having landed when this share of its symbols
+# came back. On a free provider tier a ~100-symbol job practically always drops
+# one or two names to a rate limit, so requiring status == 'success' pinned
+# eod_stock amber forever and hid real breakage behind a light already lit.
+# A run where most symbols failed still reads as stale, and an all-fail run is
+# recorded as 'failed' and never counts.
+PARTIAL_HEALTHY_RATIO = 0.8
+
+
+def run_landed(run: dict) -> bool:
+    """Did this run leave the job's data fresh? True for 'success', and for a
+    'partial' where at least PARTIAL_HEALTHY_RATIO of its symbols came back."""
+    if run["status"] == "success":
+        return True
+    if run["status"] != "partial":
+        return False
+    ok = run["symbols_ok"] or 0
+    attempted = ok + (run["symbols_failed"] or 0)
+    return attempted > 0 and ok / attempted >= PARTIAL_HEALTHY_RATIO
 
 
 def staleness_verdict(
@@ -81,7 +102,7 @@ def summarize_jobs(runs: list[dict], now: datetime) -> list[dict]:
             job["provider"] = run["provider"]
         if job["asset_class"] is None:
             job["asset_class"] = run["asset_class"]
-        if run["status"] == "success" and job["last_success_at"] is None:
+        if job["last_success_at"] is None and run_landed(run):
             job["last_success_at"] = run["finished_at"] or run["started_at"]
 
     ordered = list(EXPECTED_CADENCE) + sorted(set(seen) - set(EXPECTED_CADENCE))

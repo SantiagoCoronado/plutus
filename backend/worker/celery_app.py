@@ -12,6 +12,15 @@ celery_app = Celery(
     include=["worker.tasks"],
 )
 
+# Must exceed the longest task_time_limit (INGEST_LIMITS = 4h) with headroom.
+# Kombu's Redis transport redelivers any message still unacked after this long,
+# and task_acks_late=True means the ack only lands when the task *finishes* — so
+# a visibility timeout shorter than the work hands a second worker a duplicate
+# of a task that is still running. The nightly EOD job paces ~2.3h inside the
+# Tiingo bucket, so the 3600s default was redelivering it every hour: duplicate
+# runs then split one token bucket, and both sides failed on rate limits.
+BROKER_VISIBILITY_TIMEOUT_S = 6 * 3600
+
 celery_app.conf.update(
     timezone=settings.tz,
     enable_utc=True,
@@ -21,6 +30,7 @@ celery_app.conf.update(
     result_expires=86400,
     worker_concurrency=2,
     broker_connection_retry_on_startup=True,
+    broker_transport_options={"visibility_timeout": BROKER_VISIBILITY_TIMEOUT_S},
 )
 
 # Staggered per provider budgets; hours are in the configured local TZ

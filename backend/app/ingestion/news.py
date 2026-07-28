@@ -6,7 +6,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.db import SessionLocal
 from app.core.logging import get_logger
-from app.ingestion.eod import _close_run, _open_run
+from app.ingestion.eod import _close_run, _open_run, close_run_quietly
 from app.models import Asset, NewsItem
 from app.providers.registry import get_news_provider
 from app.schemas.news import NewsItemIn
@@ -73,6 +73,12 @@ def run_news_pull() -> int:
                 failed += 1
                 errors[asset.symbol] = f"{type(exc).__name__}: {exc}"[:300]
                 log.warning("news_pull_failed", symbol=asset.symbol, error=str(exc))
+    except BaseException as exc:  # noqa: BLE001 — re-raised; see eod._ingest_assets
+        errors["_run"] = f"{type(exc).__name__}: {exc}"[:300]
+        close_run_quietly(
+            run_id, "failed" if ok == 0 else "partial", written, ok, failed, {"errors": errors}
+        )
+        raise
     finally:
         session.close()
 
