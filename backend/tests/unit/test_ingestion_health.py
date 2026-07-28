@@ -13,6 +13,7 @@ from app.health.aggregate import (
     WEEKLY,
     overall_status,
     provider_budgets,
+    run_landed,
     staleness_verdict,
     summarize_jobs,
 )
@@ -157,3 +158,70 @@ class TestProviderBudgets:
             if budget is not None
         }
         assert {(b["provider"], b["window"]) for b in budgets} == expected
+
+
+class TestRunLanded:
+    """Staleness keys off run_landed, not status == 'success'.
+
+    eod_stock covers ~105 symbols on Tiingo's free tier, where one or two names
+    practically always drop to a rate limit. Requiring a clean 'success' meant
+    last_success_at stayed None forever, pinning the job amber no matter how
+    well it ran — and an always-amber light hides the outage it exists to show.
+    """
+
+    @pytest.mark.parametrize(
+        ("status", "ok", "failed", "expected"),
+        [
+            ("success", 105, 0, True),
+            ("partial", 103, 2, True),  # the real nightly shape
+            ("partial", 84, 21, True),  # exactly at the 80% ratio
+            ("partial", 83, 22, False),  # just under -> still stale
+            ("partial", 10, 95, False),  # mostly broken stays stale
+            ("failed", 0, 105, False),
+            ("running", 0, 0, False),  # an in-flight run proves nothing yet
+            ("partial", 0, 0, False),  # no symbols attempted
+        ],
+    )
+    def test_ratio_matrix(self, status, ok, failed, expected):
+        run = make_run("eod_stock", status=status, symbols_ok=ok, symbols_failed=failed)
+        assert run_landed(run) is expected
+
+    def test_tolerates_null_counters(self):
+        run = make_run("eod_stock", status="partial", symbols_ok=None, symbols_failed=None)
+        assert run_landed(run) is False
+
+    def test_mostly_ok_partial_keeps_the_job_green(self):
+        # the production case: every eod_stock run for a fortnight was 'partial'
+        runs = [
+            make_run("eod_stock", status="partial", age=timedelta(hours=3),
+                     symbols_ok=103, symbols_failed=2),
+            make_run("eod_stock", status="partial", age=timedelta(hours=27),
+                     symbols_ok=101, symbols_failed=4),
+        ]
+        job = {j["job_name"]: j for j in summarize_jobs(runs, NOW)}["eod_stock"]
+        assert job["staleness"] == "green"
+        assert job["last_success_at"] == NOW - timedelta(hours=3)
+
+    def test_a_job_failing_most_symbols_never_reads_green(self):
+        runs = [
+            make_run("eod_stock", status="partial", age=timedelta(hours=3),
+                     symbols_ok=4, symbols_failed=101),
+            make_run("eod_stock", status="partial", age=timedelta(hours=70),
+                     symbols_ok=2, symbols_failed=103),
+        ]
+        job = {j["job_name"]: j for j in summarize_jobs(runs, NOW)}["eod_stock"]
+        # amber, not red: "no landed run on record" is deliberately the softer
+        # verdict (staleness_verdict), and nothing here has landed.
+        assert job["staleness"] == "amber"
+        assert job["last_success_at"] is None
+
+    def test_a_stale_landed_run_still_goes_red(self):
+        runs = [
+            make_run("eod_stock", status="partial", age=timedelta(hours=3),
+                     symbols_ok=4, symbols_failed=101),
+            make_run("eod_stock", status="partial", age=timedelta(hours=70),
+                     symbols_ok=104, symbols_failed=1),
+        ]
+        job = {j["job_name"]: j for j in summarize_jobs(runs, NOW)}["eod_stock"]
+        assert job["staleness"] == "red"  # last landed 70h ago, past the 54h red
+        assert job["last_success_at"] == NOW - timedelta(hours=70)

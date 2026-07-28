@@ -118,8 +118,11 @@ class RateLimitedClient:
             if cached is not None:
                 return json.loads(cached)
 
-        self._check_budget()
+        # Refuse before spending a token (a rejected call must not wait out the
+        # bucket), but charge only once the call is actually going to be made.
+        self._assert_budget()
         self._acquire_token(acquire_timeout)
+        self._charge_budget()
         payload, tolerated = self._request_with_backoff(
             path, params, tolerate_statuses, headers
         )
@@ -136,24 +139,45 @@ class RateLimitedClient:
         )
         return f"cache:{self.provider}:{hashlib.sha256(material.encode()).hexdigest()}"
 
-    def _check_budget(self) -> None:
+    def _budget_windows(self) -> list[tuple[str, int, str, int]]:
+        """(label, budget, redis key, key ttl) for each configured hard budget."""
         now = datetime.now(UTC)
+        windows = []
         if self.limits.day_budget is not None:
-            key = f"budget:{self.provider}:day:{now:%Y%m%d}"
-            used = int(self._redis.incr(key))
-            self._redis.expire(key, 48 * 3600)
-            if used > self.limits.day_budget:
-                raise BudgetExceeded(
-                    f"{self.provider}: daily budget {self.limits.day_budget} exhausted"
-                )
+            windows.append(
+                ("daily", self.limits.day_budget, f"budget:{self.provider}:day:{now:%Y%m%d}",
+                 48 * 3600)
+            )
         if self.limits.month_budget is not None:
-            key = f"budget:{self.provider}:month:{now:%Y%m}"
-            used = int(self._redis.incr(key))
-            self._redis.expire(key, 40 * 24 * 3600)
-            if used > self.limits.month_budget:
-                raise BudgetExceeded(
-                    f"{self.provider}: monthly budget {self.limits.month_budget} exhausted"
-                )
+            windows.append(
+                ("monthly", self.limits.month_budget, f"budget:{self.provider}:month:{now:%Y%m}",
+                 40 * 24 * 3600)
+            )
+        return windows
+
+    def _assert_budget(self) -> None:
+        """Raise if a hard budget is already spent. Read-only on purpose.
+
+        The counters double as the Settings page's usage gauge, so they must
+        count calls *made*, not calls attempted: charging here would let a
+        caller that retries on BudgetExceeded (the quote poller does, every 15s)
+        drive the reported usage to several times the budget it never spent."""
+        for label, budget, key, _ttl in self._budget_windows():
+            raw = self._redis.get(key)
+            used = int(raw) if raw is not None else 0
+            if used >= budget:
+                raise BudgetExceeded(f"{self.provider}: {label} budget {budget} exhausted")
+
+    def _charge_budget(self) -> None:
+        """Book one unit against every hard budget — called once the request is certain."""
+        for _label, _budget, key, ttl in self._budget_windows():
+            self._redis.incr(key)
+            self._redis.expire(key, ttl)
+
+    def _check_budget(self) -> None:
+        """Reserve one unit: assert then charge. Kept for callers that do both at once."""
+        self._assert_budget()
+        self._charge_budget()
 
     def _acquire_token(self, acquire_timeout: float) -> None:
         deadline = self._clock() + acquire_timeout

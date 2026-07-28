@@ -1,7 +1,7 @@
 from celery.signals import task_failure
 
 from app.core.logging import configure_logging, get_logger
-from app.ingestion.eod import run_asset_backfill, run_eod_all, run_eod_ingestion
+from app.ingestion.eod import run_asset_backfill, run_eod_ingestion
 from worker.celery_app import celery_app
 
 configure_logging()
@@ -43,17 +43,43 @@ def _notify_task_failure(sender=None, exception=None, **_kwargs):
 # ~100 stocks ≈ 2.3h/night) — they need far more than the global 30-min limit.
 INGEST_LIMITS = {"time_limit": 14_400, "soft_time_limit": 14_100}
 
+# Lock TTL is the crash backstop, so it tracks the hard time limit above.
+INGEST_LOCK_TTL_S = INGEST_LIMITS["time_limit"]
+
+
+SKIPPED_LOCKED = -1  # task return value meaning "another run held the lock"
+
+
+def _eod_once(asset_class: str) -> int:
+    """run_eod_ingestion under a per-class lock; SKIPPED_LOCKED when already running.
+
+    Concurrent EOD runs do not just duplicate work: they split one provider token
+    bucket between them, so both sides stall on the rate limiter and abandon
+    symbols a single run would have fetched."""
+    from app.core.locks import redis_lock
+    from app.providers.registry import _shared_redis
+
+    with redis_lock(
+        _shared_redis(), f"ingest:eod:{asset_class}", ttl_seconds=INGEST_LOCK_TTL_S
+    ) as acquired:
+        if not acquired:
+            log.info("eod skipped: another run holds the lock", asset_class=asset_class)
+            return SKIPPED_LOCKED
+        return run_eod_ingestion(asset_class)
+
 
 @celery_app.task(name="worker.tasks.ingest_eod", **INGEST_LIMITS)
 def ingest_eod(asset_class: str) -> int:
     """Nightly EOD job for one asset-class group; returns ingestion_runs.id."""
-    return run_eod_ingestion(asset_class)
+    return _eod_once(asset_class)
 
 
 @celery_app.task(name="worker.tasks.ingest_eod_all", **INGEST_LIMITS)
 def ingest_eod_all() -> list[int]:
-    """Manual full ingestion (POST /api/v1/ingestion/run)."""
-    return run_eod_all()
+    """Manual full ingestion (POST /api/v1/ingestion/run). Takes the same
+    per-class locks as the nightly job, so pressing "run now" while the beat
+    schedule is mid-flight skips the classes already in progress."""
+    return [_eod_once(asset_class) for asset_class in ("crypto", "forex", "stock")]
 
 
 @celery_app.task(name="worker.tasks.backfill_asset", **INGEST_LIMITS)
@@ -82,10 +108,19 @@ def refresh_metrics(_prior_result=None) -> int:
 # 32 assets x 6 FMP calls at 8/min ~= 24 min — needs more than the global 30-min cap
 @celery_app.task(name="worker.tasks.refresh_fundamentals", **INGEST_LIMITS)
 def refresh_fundamentals() -> int:
-    """Weekly fundamentals refresh for stock/ETF assets (stalest-first, budget-capped)."""
+    """Weekly fundamentals refresh for stock/ETF assets (stalest-first, budget-capped).
+    Locked for the same reason as EOD: duplicates would halve the FMP budget."""
+    from app.core.locks import redis_lock
     from app.ingestion.fundamentals import run_fundamentals_refresh
+    from app.providers.registry import _shared_redis
 
-    return run_fundamentals_refresh()
+    with redis_lock(
+        _shared_redis(), "ingest:fundamentals", ttl_seconds=INGEST_LOCK_TTL_S
+    ) as acquired:
+        if not acquired:
+            log.info("refresh_fundamentals skipped: another run holds the lock")
+            return SKIPPED_LOCKED
+        return run_fundamentals_refresh()
 
 
 @celery_app.task(name="worker.tasks.refresh_fundamentals_asset")
@@ -98,10 +133,18 @@ def refresh_fundamentals_asset(asset_id: int) -> int:
 
 @celery_app.task(name="worker.tasks.pull_news")
 def pull_news() -> int:
-    """15-minute company-news pull for stock/ETF assets."""
+    """15-minute company-news pull for stock/ETF assets. Locked: a pull that
+    overruns its 15-min slot must not have the next tick racing it through the
+    same ~100 symbols on one Finnhub bucket."""
+    from app.core.locks import redis_lock
     from app.ingestion.news import run_news_pull
+    from app.providers.registry import _shared_redis
 
-    return run_news_pull()
+    with redis_lock(_shared_redis(), "ingest:news", ttl_seconds=14 * 60) as acquired:
+        if not acquired:
+            log.info("pull_news skipped: another run holds the lock")
+            return SKIPPED_LOCKED
+        return run_news_pull()
 
 
 @celery_app.task(name="worker.tasks.run_backtest")

@@ -1,6 +1,7 @@
 from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import func, select
+from sqlalchemy import update as sa_update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -70,8 +71,40 @@ def ingest_asset(
     return upsert_candles(session, candles_to_rows(df, asset.id, interval))
 
 
+# A run still 'running' this long after it started cannot be alive: the Celery
+# hard time_limit (worker.tasks.INGEST_LIMITS) is 4h, so anything past that lost
+# its worker without reaching _close_run.
+MAX_RUN_LIFETIME = timedelta(hours=6)
+
+
+def reap_stale_runs(session: Session, job_name: str, now: datetime | None = None) -> int:
+    """Close out runs of `job_name` abandoned in 'running' by a killed worker.
+
+    Without this a single lost worker leaves a row that says 'running' forever,
+    which is what the Settings page then reports as the job's last status.
+    Returns the number of rows reaped."""
+    now = now or datetime.now(UTC)
+    result = session.execute(
+        sa_update(IngestionRun)
+        .where(
+            IngestionRun.job_name == job_name,
+            IngestionRun.status == "running",
+            IngestionRun.started_at < now - MAX_RUN_LIFETIME,
+        )
+        .values(
+            status="failed",
+            finished_at=now,
+            details={"errors": {"_run": "abandoned: no worker reached completion"}},
+        )
+    )
+    return result.rowcount or 0
+
+
 def _open_run(job_name: str, asset_class: str | None, provider: str | None) -> int:
     with session_scope() as session:
+        reaped = reap_stale_runs(session, job_name)
+        if reaped:
+            log.warning("reaped_stale_runs", job_name=job_name, count=reaped)
         run = IngestionRun(
             job_name=job_name, asset_class=asset_class, provider=provider, status="running"
         )
@@ -113,6 +146,15 @@ def _ingest_assets(run_id: int, assets_query, provider_resolver) -> int:
                 failed += 1
                 errors[asset.symbol] = f"{type(exc).__name__}: {exc}"[:300]
                 log.warning("ingest_failed", symbol=asset.symbol, error=str(exc))
+    except BaseException as exc:  # noqa: BLE001 — see below; the exception is re-raised
+        # Anything the per-asset guard cannot catch: a soft time limit, a revoked
+        # task, a worker shutdown, or a failure loading the asset list. Record
+        # what actually landed and re-raise, so the run row never sticks on
+        # 'running' and Celery still sees the task fail.
+        errors["_run"] = f"{type(exc).__name__}: {exc}"[:300]
+        _close_run(run_id, "failed" if ok == 0 else "partial", rows_total, ok, failed,
+                   {"errors": errors})
+        raise
     finally:
         session.close()
 

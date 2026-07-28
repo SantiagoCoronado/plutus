@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 import pytest
 
 from app.providers.base import ProviderRateLimitError, RateLimit
@@ -84,3 +86,52 @@ def test_buckets_are_isolated_per_provider(fake_redis, fake_clock):
     a._acquire_token(acquire_timeout=1)
     b._acquire_token(acquire_timeout=1)  # separate bucket, no contention
     assert fake_clock.sleeps == []
+
+
+def test_budget_counter_stops_at_the_cap(fake_redis, fake_clock):
+    """The counter is the Settings page's usage gauge, so a refused call must
+    not inflate it. Production showed budget:tiingo:day = 4083 against a 900
+    budget: the quote poller retried every 15s and each rejection still
+    incremented, reporting 454% usage the provider was never asked for."""
+    limits = RateLimit(capacity=100, refill_amount=100, refill_period_s=1, day_budget=2)
+    client = make_client(fake_redis, fake_clock, limits)
+    key = f"budget:testprov:day:{datetime.now(UTC):%Y%m%d}"
+
+    client._check_budget()
+    client._check_budget()
+    for _ in range(10):
+        with pytest.raises(BudgetExceeded):
+            client._check_budget()
+
+    assert int(fake_redis.get(key)) == 2  # never past the budget it was given
+
+
+def test_budget_is_not_charged_when_the_bucket_refuses(fake_redis, fake_clock):
+    """A call that dies waiting for a token was never made, so it must not be
+    billed — otherwise a rate-limited job eats the daily budget of the job that
+    runs after it."""
+    limits = RateLimit(
+        capacity=1, refill_amount=1, refill_period_s=3600, day_budget=100
+    )
+    client = make_client(fake_redis, fake_clock, limits)
+    key = f"budget:testprov:day:{datetime.now(UTC):%Y%m%d}"
+
+    client._assert_budget()
+    client._acquire_token(acquire_timeout=3)
+    client._charge_budget()
+    assert int(fake_redis.get(key)) == 1
+
+    client._assert_budget()  # budget is fine...
+    with pytest.raises(ProviderRateLimitError):
+        client._acquire_token(acquire_timeout=3)  # ...the bucket is not
+    assert int(fake_redis.get(key)) == 1  # unchanged: no request was issued
+
+
+def test_assert_budget_does_not_charge(fake_redis, fake_clock):
+    limits = RateLimit(capacity=100, refill_amount=100, refill_period_s=1, day_budget=5)
+    client = make_client(fake_redis, fake_clock, limits)
+    key = f"budget:testprov:day:{datetime.now(UTC):%Y%m%d}"
+
+    for _ in range(20):
+        client._assert_budget()
+    assert fake_redis.get(key) is None

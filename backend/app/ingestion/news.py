@@ -73,6 +73,11 @@ def run_news_pull() -> int:
                 failed += 1
                 errors[asset.symbol] = f"{type(exc).__name__}: {exc}"[:300]
                 log.warning("news_pull_failed", symbol=asset.symbol, error=str(exc))
+    except BaseException as exc:  # noqa: BLE001 — re-raised; see eod._ingest_assets
+        errors["_run"] = f"{type(exc).__name__}: {exc}"[:300]
+        _close_run(run_id, "failed" if ok == 0 else "partial", written, ok, failed,
+                   {"errors": errors})
+        raise
     finally:
         session.close()
 
