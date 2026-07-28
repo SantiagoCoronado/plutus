@@ -45,6 +45,11 @@ redis.call('EXPIRE', key, 7200)
 return result
 """
 
+# How long a caller will wait for a token before giving up. This must stay above
+# the slowest provider's steady-state seconds_per_token, or every call after the
+# initial burst is refused outright (test_rate_limit_burst pins the relation).
+DEFAULT_ACQUIRE_TIMEOUT_S = 120.0
+
 MAX_ATTEMPTS = 5
 BACKOFF_BASE_S = 1.0
 BACKOFF_FACTOR = 2.0
@@ -97,7 +102,7 @@ class RateLimitedClient:
         params: dict[str, Any] | None = None,
         *,
         cache_ttl: int | None = None,
-        acquire_timeout: float = 120.0,
+        acquire_timeout: float = DEFAULT_ACQUIRE_TIMEOUT_S,
         cache_key_exclude: tuple[str, ...] = ("token", "apikey", "api_key"),
         tolerate_statuses: tuple[int, ...] = (),
         headers: dict[str, str] | None = None,

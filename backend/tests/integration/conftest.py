@@ -101,6 +101,41 @@ def test_database():
     dispose_engine()
 
 
+@pytest.fixture(scope="session", autouse=True)
+def unthrottled_providers():
+    """Give the integration suite wide-open token buckets.
+
+    These tests mock provider HTTP with respx, so pacing against the real
+    per-provider limits only buys wall-clock: the bucket's time.sleep is genuine
+    even when the request behind it is not. With Tiingo's production bucket at
+    ~90s/token past a 5-token burst, a handful of seeded symbols dragged the
+    suite from ~2min to ~7.5min. Bucket behaviour itself is covered by the unit
+    tests (test_token_bucket, test_backoff_and_cache) against a fake clock.
+
+    Day/month budgets are preserved — several flows assert on budget counters.
+    """
+    from app.providers.base import PROVIDER_LIMITS, RateLimit
+
+    original = dict(PROVIDER_LIMITS)
+    PROVIDER_LIMITS.update(
+        {
+            name: RateLimit(
+                capacity=10_000,
+                refill_amount=10_000,
+                refill_period_s=1,
+                day_budget=limits.day_budget,
+                month_budget=limits.month_budget,
+                # left undeclared: these deliberately exceed any published cap
+                published_per_period=None,
+            )
+            for name, limits in original.items()
+        }
+    )
+    yield
+    PROVIDER_LIMITS.clear()
+    PROVIDER_LIMITS.update(original)
+
+
 @pytest.fixture(autouse=True)
 def clean_state(test_database):
     yield
