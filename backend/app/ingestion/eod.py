@@ -126,6 +126,18 @@ def _close_run(
         run.details = details
 
 
+def close_run_quietly(
+    run_id: int, status: str, rows_written: int, ok: int, failed: int, details: dict
+) -> None:
+    """_close_run for the crash path: a DB failure here must not replace the
+    exception that is already on its way up. Worst case the row stays 'running'
+    and the next run of the same job reaps it."""
+    try:
+        _close_run(run_id, status, rows_written, ok, failed, details)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("close_run_failed", run_id=run_id, error=str(exc))
+
+
 def _ingest_assets(run_id: int, assets_query, provider_resolver) -> int:
     """Shared driver: per-asset try/except with per-asset commits so partial progress sticks."""
     rows_total = ok = failed = 0
@@ -146,14 +158,15 @@ def _ingest_assets(run_id: int, assets_query, provider_resolver) -> int:
                 failed += 1
                 errors[asset.symbol] = f"{type(exc).__name__}: {exc}"[:300]
                 log.warning("ingest_failed", symbol=asset.symbol, error=str(exc))
-    except BaseException as exc:  # noqa: BLE001 — see below; the exception is re-raised
+    except BaseException as exc:  # noqa: BLE001 — the exception is re-raised below
         # Anything the per-asset guard cannot catch: a soft time limit, a revoked
         # task, a worker shutdown, or a failure loading the asset list. Record
         # what actually landed and re-raise, so the run row never sticks on
         # 'running' and Celery still sees the task fail.
         errors["_run"] = f"{type(exc).__name__}: {exc}"[:300]
-        _close_run(run_id, "failed" if ok == 0 else "partial", rows_total, ok, failed,
-                   {"errors": errors})
+        close_run_quietly(
+            run_id, "failed" if ok == 0 else "partial", rows_total, ok, failed, {"errors": errors}
+        )
         raise
     finally:
         session.close()

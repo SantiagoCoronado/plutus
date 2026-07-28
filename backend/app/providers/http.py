@@ -161,7 +161,13 @@ class RateLimitedClient:
         The counters double as the Settings page's usage gauge, so they must
         count calls *made*, not calls attempted: charging here would let a
         caller that retries on BudgetExceeded (the quote poller does, every 15s)
-        drive the reported usage to several times the budget it never spent."""
+        drive the reported usage to several times the budget it never spent.
+
+        Splitting the check from the charge lets concurrent callers race past
+        the cap by at most one call each. That is deliberate: PROVIDER_LIMITS
+        already sits ~10% under each published free tier, so a couple of extra
+        calls are free, and the alternative (charge first) bills every request
+        the token bucket later refuses."""
         for label, budget, key, _ttl in self._budget_windows():
             raw = self._redis.get(key)
             used = int(raw) if raw is not None else 0

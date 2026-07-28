@@ -31,7 +31,6 @@ celery_app.conf.update(
     worker_concurrency=2,
     broker_connection_retry_on_startup=True,
     broker_transport_options={"visibility_timeout": BROKER_VISIBILITY_TIMEOUT_S},
-    result_backend_transport_options={"visibility_timeout": BROKER_VISIBILITY_TIMEOUT_S},
 )
 
 # Staggered per provider budgets; hours are in the configured local TZ
